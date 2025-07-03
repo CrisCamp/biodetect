@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "957544639048",
+    "project_id": "biodetect-4fc3b",
+    "storage_bucket": "biodetect-4fc3b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:957544639048:android:553b35cfb775f7c983467d",
+        "android_client_info": {
+          "package_name": "com.example.biodetect"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB3fl_eVDXZq1SY9fqzJWDuj56ATd5294s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

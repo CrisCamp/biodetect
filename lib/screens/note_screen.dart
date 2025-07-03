@@ -1,7 +1,7 @@
+import 'package:biodetect/views/notes/crear_editar_bitacora_screen.dart';
+import 'package:biodetect/views/notes/explorar_bitacoras_publicas_screen.dart';
 import 'package:flutter/material.dart';
-import '../themes.dart';
-import '../../views/notes/crear_editar_bitacora_screen.dart';
-import '../../views/notes/explorar_bitacoras_publicas_screen.dart';
+import 'package:biodetect/themes.dart';
 
 class BinnacleScreen extends StatelessWidget {
   const BinnacleScreen({super.key});

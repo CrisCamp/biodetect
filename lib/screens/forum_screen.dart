@@ -1,5 +1,5 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../themes.dart';
 
 class ForumScreen extends StatelessWidget {
   const ForumScreen({super.key});

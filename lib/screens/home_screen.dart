@@ -1,8 +1,8 @@
+import 'package:biodetect/views/map/mapa.dart';
+import 'package:biodetect/views/registers/album_fotos.dart';
+import 'package:biodetect/views/registers/captura_foto.dart';
 import 'package:flutter/material.dart';
-import '../../views/registers/album_fotos.dart';
-import '../../views/registers/captura_foto.dart';
-import '../../views/map/mapa.dart';
-import '../themes.dart';
+import 'package:biodetect/themes.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});

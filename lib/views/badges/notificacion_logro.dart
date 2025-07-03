@@ -1,7 +1,5 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../../themes.dart';
-// Si usas Lottie, descomenta la siguiente línea y agrega el paquete lottie en pubspec.yaml
-// import 'package:lottie/lottie.dart';
 
 class NotificacionLogroScreen extends StatelessWidget {
   final String titulo;

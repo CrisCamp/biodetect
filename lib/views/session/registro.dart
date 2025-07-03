@@ -1,5 +1,8 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../../../themes.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart'; // <-- Agregar import
 
 class Registro extends StatefulWidget {
   const Registro({super.key});
@@ -32,10 +35,22 @@ class _RegistroState extends State<Registro> {
     });
   }
 
-  void _onRegistrar() {
+  Future<void> _onRegistrar() async {
     if (!_aceptaTerminos) {
       setState(() {
         _error = 'Debes aceptar los términos y condiciones.';
+      });
+      return;
+    }
+    if (_passwordController.text != _confirmController.text) {
+      setState(() {
+        _error = 'Las contraseñas no coinciden.';
+      });
+      return;
+    }
+    if (_passwordStrength < 3) {
+      setState(() {
+        _error = 'La contraseña es demasiado débil.';
       });
       return;
     }
@@ -43,13 +58,111 @@ class _RegistroState extends State<Registro> {
       _loading = true;
       _error = null;
     });
-    // Simulación de proceso de registro
-    Future.delayed(const Duration(seconds: 2), () {
+    try {
+      // Crear usuario en Firebase Auth
+      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      final user = credential.user;
+      if (user != null) {
+        // Guardar datos en Firestore
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'uid': user.uid,
+          'email': user.email,
+          'fullname': _nombreController.text.trim(),
+          'profilePicture': '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'loginAt': FieldValue.serverTimestamp(),
+          'badges': [],
+        });
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _error = e.message ?? 'Error al registrar usuario.';
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Error inesperado: $e';
+      });
+    } finally {
       setState(() {
         _loading = false;
-        // Aquí iría la lógica real de registro
       });
+    }
+  }
+
+  // Función para registro con Google (idéntica al login)
+  Future<void> _onGoogleSignUp() async {
+    setState(() {
+      _loading = true;
+      _error = null;
     });
+
+    try {
+      // Trigger the authentication flow
+      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+      
+      if (googleUser == null) {
+        setState(() {
+          _loading = false;
+        });
+        return;
+      }
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      // Create a new credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in to Firebase with the Google credentials
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
+      final user = userCredential.user;
+
+      if (user != null) {
+        // Crear/actualizar documento del usuario
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        await userDoc.set({
+          'uid': user.uid,
+          'email': user.email,
+          'fullname': user.displayName ?? '',
+          'profilePicture': user.photoURL ?? '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'loginAt': FieldValue.serverTimestamp(),
+          'badges': [],
+        }, SetOptions(merge: true)); // merge: true para no sobrescribir si existe
+
+        // Regresar al login (registro exitoso)
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        switch (e.code) {
+          case 'account-exists-with-different-credential':
+            _error = 'Ya existe una cuenta con este correo usando otro método.';
+            break;
+          default:
+            _error = e.message ?? 'Error al registrarse con Google.';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Error inesperado: $e';
+      });
+    } finally {
+      setState(() {
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -87,7 +200,7 @@ class _RegistroState extends State<Registro> {
                       const SizedBox(height: 24),
                       // Advertencia institucional
                       Visibility(
-                        visible: false, // Cambia a true si quieres mostrar la advertencia
+                        visible: false,
                         child: Padding(
                           padding: const EdgeInsets.only(bottom: 16),
                           child: Text(
@@ -301,9 +414,7 @@ class _RegistroState extends State<Registro> {
                             height: 24,
                           ),
                           label: const Text('Registrarse con Google'),
-                          onPressed: _loading ? null : () {
-                            // Acción para registro con Google
-                          },
+                          onPressed: _loading ? null : _onGoogleSignUp, // <-- Cambiar aquí
                         ),
                       ),
                       const SizedBox(height: 16),

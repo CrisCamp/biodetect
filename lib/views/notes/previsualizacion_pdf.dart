@@ -1,5 +1,5 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../../themes.dart';
 
 class PrevisualizacionBitacoraScreen extends StatelessWidget {
   const PrevisualizacionBitacoraScreen({super.key});

@@ -1,7 +1,11 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../../views/user/recuperar_contrasena.dart';
-import '../../views/session/registro.dart';
-import '../../../themes.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart'; // <-- Agregar import
+import 'package:biodetect/views/user/recuperar_contrasena.dart';
+import 'package:biodetect/views/session/registro.dart';
+import 'package:biodetect/menu.dart';
 
 class InicioSesion extends StatefulWidget {
   const InicioSesion({super.key});
@@ -24,19 +28,191 @@ class _InicioSesionState extends State<InicioSesion> {
     super.dispose();
   }
 
-  void _onLogin() {
+  // Función para login con Google
+  Future<void> _onGoogleSignIn() async {
     setState(() {
       _loading = true;
       _error = null;
     });
-    // Simulación de proceso de login
-    Future.delayed(const Duration(seconds: 2), () {
+
+    try {
+      print('Iniciando Google Sign-In...'); // Debug
+
+      // Trigger the authentication flow
+      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+      
+      if (googleUser == null) {
+        // El usuario canceló el login
+        setState(() {
+          _loading = false;
+        });
+        return;
+      }
+
+      print('Usuario Google seleccionado: ${googleUser.email}'); // Debug
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      // Create a new credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in to Firebase with the Google credentials
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
+      final user = userCredential.user;
+
+      print('Login con Google exitoso: ${user?.email}'); // Debug
+
+      if (user != null) {
+        // Verifica si el documento del usuario existe
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final docSnapshot = await userDoc.get();
+        
+        if (!docSnapshot.exists) {
+          // Si no existe, créalo con los datos de Google
+          await userDoc.set({
+            'uid': user.uid,
+            'email': user.email,
+            'fullname': user.displayName ?? '',
+            'profilePicture': user.photoURL ?? '',
+            'createdAt': FieldValue.serverTimestamp(),
+            'loginAt': FieldValue.serverTimestamp(),
+            'badges': [],
+          });
+          print('Documento de usuario creado en Firestore'); // Debug
+        } else {
+          // Si existe, actualiza la fecha de último login
+          await userDoc.update({
+            'loginAt': FieldValue.serverTimestamp(),
+          });
+          print('Documento de usuario actualizado en Firestore'); // Debug
+        }
+
+        // Navegar a la pantalla principal
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const MainMenu(),
+            ),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      print('Error de Firebase Auth: ${e.code} - ${e.message}'); // Debug
+      setState(() {
+        switch (e.code) {
+          case 'account-exists-with-different-credential':
+            _error = 'Ya existe una cuenta con este correo usando otro método.';
+            break;
+          case 'invalid-credential':
+            _error = 'Las credenciales de Google son inválidas.';
+            break;
+          case 'operation-not-allowed':
+            _error = 'El login con Google no está habilitado.';
+            break;
+          default:
+            _error = e.message ?? 'Error al iniciar sesión con Google.';
+        }
+      });
+    } catch (e) {
+      print('Error general: $e'); // Debug
+      setState(() {
+        _error = 'Error inesperado: $e';
+      });
+    } finally {
       setState(() {
         _loading = false;
-        // Aquí iría la lógica real de autenticación
-        // Si hay error, asigna un mensaje a _error
       });
+    }
+  }
+
+  Future<void> _onLogin() async {
+    // Agregar validación básica
+    if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
+      setState(() {
+        _error = 'Por favor completa todos los campos.';
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
     });
+    
+    try {
+      print('Intentando login con: ${_emailController.text.trim()}'); // Debug
+      
+      // Autenticación con correo y contraseña
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      
+      print('Login exitoso: ${credential.user?.email}'); // Debug
+      
+      final user = credential.user;
+      if (user != null) {
+        // Verifica si el documento del usuario existe
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final docSnapshot = await userDoc.get();
+        if (!docSnapshot.exists) {
+          // Si no existe, créalo con los datos básicos
+          await userDoc.set({
+            'uid': user.uid,
+            'email': user.email,
+            'fullname': user.displayName ?? '',
+            'profilePicture': user.photoURL ?? '',
+            'createdAt': FieldValue.serverTimestamp(),
+            'loginAt': FieldValue.serverTimestamp(),
+            'badges': [],
+          });
+        } else {
+          // Si existe, actualiza la fecha de último login
+          await userDoc.update({
+            'loginAt': FieldValue.serverTimestamp(),
+          });
+        }
+        // Aquí puedes navegar a la pantalla principal de tu app
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const MainMenu(),
+            ),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      print('Error de Firebase: ${e.code} - ${e.message}'); // Debug
+      setState(() {
+        switch (e.code) {
+          case 'user-not-found':
+            _error = 'No existe una cuenta con este correo.';
+            break;
+          case 'wrong-password':
+            _error = 'Contraseña incorrecta.';
+            break;
+          case 'invalid-email':
+            _error = 'El correo no es válido.';
+            break;
+          default:
+            _error = e.message ?? 'Error al iniciar sesión.';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Error inesperado: $e';
+      });
+    } finally {
+      setState(() {
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -190,7 +366,7 @@ class _InicioSesionState extends State<InicioSesion> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      // Botón: Iniciar con Google
+                      // Botón: Iniciar con Google (ACTUALIZADO)
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
@@ -211,9 +387,7 @@ class _InicioSesionState extends State<InicioSesion> {
                             'Continuar con Google',
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          onPressed: _loading ? null : () {
-                            // Acción para login con Google
-                          },
+                          onPressed: _loading ? null : _onGoogleSignIn, // <-- Cambiar aquí
                         ),
                       ),
                       const SizedBox(height: 16),

@@ -1,5 +1,5 @@
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import '../../themes.dart';
 import 'crear_editar_bitacora_screen.dart';
 
 class MisBitacorasScreen extends StatelessWidget {

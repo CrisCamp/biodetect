@@ -1,10 +1,93 @@
+import 'package:biodetect/views/notes/mis_bitacoras.dart';
+import 'package:biodetect/views/user/editar_perfil.dart';
+import 'package:biodetect/views/session/inicio_sesion.dart';
 import 'package:flutter/material.dart';
-import '../themes.dart';
-import '../../views/notes/mis_bitacoras.dart';
-import '../../views/user/editar_perfil.dart';
+import 'package:biodetect/themes.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
+
+  Future<void> _cerrarSesion(BuildContext context) async {
+    // Mostrar diálogo de confirmación
+    final bool? confirmar = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: AppColors.backgroundCard,
+          title: const Text(
+            '¿Cerrar sesión?',
+            style: TextStyle(color: AppColors.textWhite),
+          ),
+          content: const Text(
+            '¿Estás seguro de que quieres cerrar sesión?',
+            style: TextStyle(color: AppColors.textWhite),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text(
+                'Cancelar',
+                style: TextStyle(color: AppColors.textWhite),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text(
+                'Cerrar sesión',
+                style: TextStyle(color: AppColors.warning),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    // Si el usuario confirmó, cerrar sesión
+    if (confirmar == true && context.mounted) {
+      try {
+        // Mostrar indicador de carga
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(color: AppColors.mintGreen),
+          ),
+        );
+
+        // Cerrar sesión en Firebase
+        await FirebaseAuth.instance.signOut();
+
+        // Cerrar diálogo de carga
+        if (context.mounted) {
+          Navigator.of(context).pop();
+        }
+
+        // Navegar a la pantalla de inicio de sesión
+        if (context.mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const InicioSesion()),
+            (route) => false, // Elimina todas las pantallas anteriores
+          );
+        }
+      } catch (e) {
+        // Cerrar diálogo de carga si está abierto
+        if (context.mounted) {
+          Navigator.of(context).pop();
+        }
+
+        // Mostrar error
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al cerrar sesión: $e'),
+              backgroundColor: AppColors.warning,
+            ),
+          );
+        }
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -147,9 +230,9 @@ class ProfileScreen extends StatelessWidget {
                 _DividerPerfil(),
                 _AccionPerfilTile(
                   icon: Icons.logout,
-                  iconColor: AppColors.textBlueNormal,
+                  iconColor: AppColors.warning, // Cambiar color a warning
                   label: "Cerrar Sesión",
-                  onTap: () {},
+                  onTap: () => _cerrarSesion(context), // Llamar a la función
                   trailing: null,
                 ),
               ],

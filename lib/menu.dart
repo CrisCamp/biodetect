@@ -2,8 +2,9 @@ import 'package:biodetect/screens/note_screen.dart';
 import 'package:biodetect/screens/forum_screen.dart';
 import 'package:biodetect/screens/home_screen.dart';
 import 'package:biodetect/screens/profile_screen.dart';
+import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
-import 'themes.dart';
+
 
 class MainMenu extends StatefulWidget {
   const MainMenu({super.key});
