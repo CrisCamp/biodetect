@@ -2,7 +2,8 @@ import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_sign_in/google_sign_in.dart'; // <-- Agregar import
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart'; 
 import 'package:biodetect/views/user/recuperar_contrasena.dart';
 import 'package:biodetect/views/session/registro.dart';
 import 'package:biodetect/menu.dart';
@@ -20,6 +21,14 @@ class _InicioSesionState extends State<InicioSesion> {
   bool _loading = false;
   String? _error;
   bool _remember = false;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRememberPreference(); // <-- Cargar preferencia al iniciar
+    _checkAutoLogin(); // <-- Verificar login automático
+  }
 
   @override
   void dispose() {
@@ -28,7 +37,59 @@ class _InicioSesionState extends State<InicioSesion> {
     super.dispose();
   }
 
-  // Función para login con Google
+  // Cargar preferencia de "recordar sesión"
+  Future<void> _loadRememberPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedEmail = prefs.getString('saved_email') ?? '';
+    final rememberMe = prefs.getBool('remember_me') ?? false;
+    
+    setState(() {
+      _remember = rememberMe;
+      if (rememberMe && savedEmail.isNotEmpty) {
+        _emailController.text = savedEmail;
+      }
+    });
+  }
+
+  // Verificar si hay una sesión activa para login automático
+  Future<void> _checkAutoLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final autoLogin = prefs.getBool('auto_login') ?? false;
+    
+    // Verificar si hay usuario logueado en Firebase
+    final user = FirebaseAuth.instance.currentUser;
+    
+    if (autoLogin && user != null) {
+      // Si está marcado "recordar sesión" y hay usuario activo, ir al menu
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const MainMenu()),
+          );
+        }
+      });
+    }
+  }
+
+  // Guardar preferencias de "recordar sesión"
+  Future<void> _saveRememberPreference(String email, bool remember) async {
+    final prefs = await SharedPreferences.getInstance();
+    
+    if (remember) {
+      // Guardar email y preferencias
+      await prefs.setString('saved_email', email);
+      await prefs.setBool('remember_me', true);
+      await prefs.setBool('auto_login', true);
+    } else {
+      // Limpiar preferencias
+      await prefs.remove('saved_email');
+      await prefs.setBool('remember_me', false);
+      await prefs.setBool('auto_login', false);
+    }
+  }
+
+  // Función para login con Google (actualizada)
   Future<void> _onGoogleSignIn() async {
     setState(() {
       _loading = true;
@@ -36,43 +97,30 @@ class _InicioSesionState extends State<InicioSesion> {
     });
 
     try {
-      print('Iniciando Google Sign-In...'); // Debug
-
-      // Trigger the authentication flow
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
       
       if (googleUser == null) {
-        // El usuario canceló el login
         setState(() {
           _loading = false;
         });
         return;
       }
 
-      print('Usuario Google seleccionado: ${googleUser.email}'); // Debug
-
-      // Obtain the auth details from the request
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-      // Create a new credential
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      // Sign in to Firebase with the Google credentials
       final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
       final user = userCredential.user;
 
-      print('Login con Google exitoso: ${user?.email}'); // Debug
-
       if (user != null) {
-        // Verifica si el documento del usuario existe
+        // Crear/actualizar documento del usuario
         final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
         final docSnapshot = await userDoc.get();
         
         if (!docSnapshot.exists) {
-          // Si no existe, créalo con los datos de Google
           await userDoc.set({
             'uid': user.uid,
             'email': user.email,
@@ -82,27 +130,24 @@ class _InicioSesionState extends State<InicioSesion> {
             'loginAt': FieldValue.serverTimestamp(),
             'badges': [],
           });
-          print('Documento de usuario creado en Firestore'); // Debug
         } else {
-          // Si existe, actualiza la fecha de último login
           await userDoc.update({
             'loginAt': FieldValue.serverTimestamp(),
           });
-          print('Documento de usuario actualizado en Firestore'); // Debug
         }
 
-        // Navegar a la pantalla principal
+        // Guardar preferencias si "recordar sesión" está marcado
+        await _saveRememberPreference(user.email ?? '', _remember);
+
+        // Navegar al menu principal
         if (mounted) {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => const MainMenu(),
-            ),
+            MaterialPageRoute(builder: (context) => const MainMenu()),
           );
         }
       }
     } on FirebaseAuthException catch (e) {
-      print('Error de Firebase Auth: ${e.code} - ${e.message}'); // Debug
       setState(() {
         switch (e.code) {
           case 'account-exists-with-different-credential':
@@ -119,7 +164,6 @@ class _InicioSesionState extends State<InicioSesion> {
         }
       });
     } catch (e) {
-      print('Error general: $e'); // Debug
       setState(() {
         _error = 'Error inesperado: $e';
       });
@@ -130,8 +174,8 @@ class _InicioSesionState extends State<InicioSesion> {
     }
   }
 
+  // Función para login con correo/contraseña (actualizada)
   Future<void> _onLogin() async {
-    // Agregar validación básica
     if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
       setState(() {
         _error = 'Por favor completa todos los campos.';
@@ -145,23 +189,18 @@ class _InicioSesionState extends State<InicioSesion> {
     });
     
     try {
-      print('Intentando login con: ${_emailController.text.trim()}'); // Debug
-      
-      // Autenticación con correo y contraseña
       final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       
-      print('Login exitoso: ${credential.user?.email}'); // Debug
-      
       final user = credential.user;
       if (user != null) {
-        // Verifica si el documento del usuario existe
+        // Crear/actualizar documento del usuario
         final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
         final docSnapshot = await userDoc.get();
+        
         if (!docSnapshot.exists) {
-          // Si no existe, créalo con los datos básicos
           await userDoc.set({
             'uid': user.uid,
             'email': user.email,
@@ -172,23 +211,23 @@ class _InicioSesionState extends State<InicioSesion> {
             'badges': [],
           });
         } else {
-          // Si existe, actualiza la fecha de último login
           await userDoc.update({
             'loginAt': FieldValue.serverTimestamp(),
           });
         }
-        // Aquí puedes navegar a la pantalla principal de tu app
+
+        // Guardar preferencias si "recordar sesión" está marcado
+        await _saveRememberPreference(_emailController.text.trim(), _remember);
+
+        // Navegar al menu principal
         if (mounted) {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => const MainMenu(),
-            ),
+            MaterialPageRoute(builder: (context) => const MainMenu()),
           );
         }
       }
     } on FirebaseAuthException catch (e) {
-      print('Error de Firebase: ${e.code} - ${e.message}'); // Debug
       setState(() {
         switch (e.code) {
           case 'user-not-found':
@@ -199,6 +238,9 @@ class _InicioSesionState extends State<InicioSesion> {
             break;
           case 'invalid-email':
             _error = 'El correo no es válido.';
+            break;
+          case 'too-many-requests':
+            _error = 'Demasiados intentos fallidos. Intenta más tarde.';
             break;
           default:
             _error = e.message ?? 'Error al iniciar sesión.';
@@ -256,10 +298,10 @@ class _InicioSesionState extends State<InicioSesion> {
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 16),
-                      // Campo: Contraseña
+                      // Campo: Contraseña con ojo dinámico
                       TextFormField(
                         controller: _passwordController,
-                        obscureText: true,
+                        obscureText: _obscurePassword,
                         decoration: InputDecoration(
                           hintText: 'Contraseña',
                           filled: true,
@@ -269,11 +311,22 @@ class _InicioSesionState extends State<InicioSesion> {
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
                           ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                              color: AppColors.textWhite.withOpacity(0.7),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _obscurePassword = !_obscurePassword;
+                              });
+                            },
+                          ),
                         ),
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 8),
-                      // Recordar sesión
+                      // Recordar sesión (actualizado)
                       Row(
                         children: [
                           Checkbox(
@@ -284,10 +337,34 @@ class _InicioSesionState extends State<InicioSesion> {
                               });
                             },
                             activeColor: AppColors.buttonGreen2,
+                            checkColor: AppColors.textBlack,
                           ),
                           const Text(
                             'Recordar sesión',
                             style: TextStyle(color: AppColors.textWhite),
+                          ),
+                          // Agregar icono de información
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: GestureDetector(
+                              onTap: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Mantiene tu sesión activa para no tener que iniciar sesión cada vez.',
+                                      style: TextStyle(color: AppColors.textWhite),
+                                    ),
+                                    backgroundColor: AppColors.slateGreen,
+                                    duration: Duration(seconds: 3),
+                                  ),
+                                );
+                              },
+                              child: Icon(
+                                Icons.info_outline,
+                                size: 16,
+                                color: AppColors.textWhite.withOpacity(0.7),
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -331,7 +408,8 @@ class _InicioSesionState extends State<InicioSesion> {
                             MaterialPageRoute(
                               builder: (context) => const RecuperarContrasena(),
                             ),
-                          );                        },
+                          );
+                        },
                         child: const Text(
                           '¿Olvidaste tu contraseña?',
                           style: TextStyle(
@@ -366,7 +444,7 @@ class _InicioSesionState extends State<InicioSesion> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      // Botón: Iniciar con Google (ACTUALIZADO)
+                      // Botón: Iniciar con Google
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
@@ -387,7 +465,7 @@ class _InicioSesionState extends State<InicioSesion> {
                             'Continuar con Google',
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          onPressed: _loading ? null : _onGoogleSignIn, // <-- Cambiar aquí
+                          onPressed: _loading ? null : _onGoogleSignIn,
                         ),
                       ),
                       const SizedBox(height: 16),
@@ -399,7 +477,8 @@ class _InicioSesionState extends State<InicioSesion> {
                             MaterialPageRoute(
                               builder: (context) => const Registro(),
                             ),
-                          );                        },
+                          );
+                        },
                         child: const Text(
                           '¿No tienes cuenta? Regístrate',
                           style: TextStyle(
