@@ -2,7 +2,7 @@ import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_sign_in/google_sign_in.dart'; // <-- Agregar import
+import 'package:biodetect/views/legal/terminos_condiciones.dart';
 
 class Registro extends StatefulWidget {
   const Registro({super.key});
@@ -22,6 +22,8 @@ class _RegistroState extends State<Registro> {
   bool _aceptaTerminos = false;
   String? _error;
   int _passwordStrength = 0;
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
 
   void _checkPasswordStrength(String value) {
     int strength = 0;
@@ -95,76 +97,6 @@ class _RegistroState extends State<Registro> {
     }
   }
 
-  // Función para registro con Google (idéntica al login)
-  Future<void> _onGoogleSignUp() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      // Trigger the authentication flow
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      
-      if (googleUser == null) {
-        setState(() {
-          _loading = false;
-        });
-        return;
-      }
-
-      // Obtain the auth details from the request
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-      // Create a new credential
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      // Sign in to Firebase with the Google credentials
-      final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
-      final user = userCredential.user;
-
-      if (user != null) {
-        // Crear/actualizar documento del usuario
-        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-        await userDoc.set({
-          'uid': user.uid,
-          'email': user.email,
-          'fullname': user.displayName ?? '',
-          'profilePicture': user.photoURL ?? '',
-          'createdAt': FieldValue.serverTimestamp(),
-          'loginAt': FieldValue.serverTimestamp(),
-          'badges': [],
-        }, SetOptions(merge: true)); // merge: true para no sobrescribir si existe
-
-        // Regresar al login (registro exitoso)
-        if (mounted) {
-          Navigator.pop(context);
-        }
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        switch (e.code) {
-          case 'account-exists-with-different-credential':
-            _error = 'Ya existe una cuenta con este correo usando otro método.';
-            break;
-          default:
-            _error = e.message ?? 'Error al registrarse con Google.';
-        }
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'Error inesperado: $e';
-      });
-    } finally {
-      setState(() {
-        _loading = false;
-      });
-    }
-  }
-
   @override
   void dispose() {
     _nombreController.dispose();
@@ -198,21 +130,6 @@ class _RegistroState extends State<Registro> {
                         height: 120,
                       ),
                       const SizedBox(height: 24),
-                      // Advertencia institucional
-                      Visibility(
-                        visible: false,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: Text(
-                            '⚠ Usa tu correo institucional (@cucba.edu.mx) para acceder al foro.',
-                            style: TextStyle(
-                              color: AppColors.warning,
-                              fontSize: 12,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
                       // Campo: Nombre completo
                       TextFormField(
                         controller: _nombreController,
@@ -229,7 +146,7 @@ class _RegistroState extends State<Registro> {
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 16),
-                      // Campo: Correo institucional
+                        // Campo: Correo
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
@@ -246,10 +163,10 @@ class _RegistroState extends State<Registro> {
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 16),
-                      // Campo: Contraseña
+                      // Campo: Contraseña con ojo dinámico
                       TextFormField(
                         controller: _passwordController,
-                        obscureText: true,
+                        obscureText: _obscurePassword,
                         onChanged: _checkPasswordStrength,
                         decoration: InputDecoration(
                           hintText: 'Contraseña',
@@ -259,6 +176,17 @@ class _RegistroState extends State<Registro> {
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                              color: AppColors.textWhite.withOpacity(0.7),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _obscurePassword = !_obscurePassword;
+                              });
+                            },
                           ),
                         ),
                         style: const TextStyle(color: AppColors.textWhite),
@@ -283,10 +211,10 @@ class _RegistroState extends State<Registro> {
                           }),
                         ),
                       ),
-                      // Campo: Confirmar contraseña
+                      // Campo: Confirmar contraseña con ojo dinámico
                       TextFormField(
                         controller: _confirmController,
-                        obscureText: true,
+                        obscureText: _obscureConfirm,
                         decoration: InputDecoration(
                           hintText: 'Confirmar contraseña',
                           filled: true,
@@ -295,6 +223,17 @@ class _RegistroState extends State<Registro> {
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscureConfirm ? Icons.visibility_off : Icons.visibility,
+                              color: AppColors.textWhite.withOpacity(0.7),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _obscureConfirm = !_obscureConfirm;
+                              });
+                            },
                           ),
                         ),
                         style: const TextStyle(color: AppColors.textWhite),
@@ -317,14 +256,25 @@ class _RegistroState extends State<Registro> {
                             style: TextStyle(color: AppColors.textBlack),
                           ),
                           GestureDetector(
-                            onTap: () {
-                              // Acción para mostrar términos y condiciones
+                            onTap: () async {
+                              final result = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const TerminosCondiciones(),
+                                ),
+                              );
+                              if (result == true) {
+                                setState(() {
+                                  _aceptaTerminos = true;
+                                });
+                              }
                             },
                             child: const Text(
                               'términos y condiciones',
                               style: TextStyle(
                                 color: AppColors.textBlueNormal,
                                 fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.underline,
                               ),
                             ),
                           ),
@@ -369,55 +319,7 @@ class _RegistroState extends State<Registro> {
                               : const Text('Crear cuenta'),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      // Separador estilizado
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              height: 1,
-                              color: AppColors.brownDark3,
-                            ),
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 8),
-                            child: Text(
-                              'O',
-                              style: TextStyle(color: AppColors.textWhite),
-                            ),
-                          ),
-                          Expanded(
-                            child: Container(
-                              height: 1,
-                              color: AppColors.brownDark3,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      // Botón: Registrarse con Google
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.white,
-                            foregroundColor: AppColors.textBlack,
-                            textStyle: const TextStyle(fontWeight: FontWeight.bold),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          icon: Image.asset(
-                            'assets/ic_google.png',
-                            width: 24,
-                            height: 24,
-                          ),
-                          label: const Text('Registrarse con Google'),
-                          onPressed: _loading ? null : _onGoogleSignUp, // <-- Cambiar aquí
-                        ),
-                      ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
                       // Enlace a Login
                       GestureDetector(
                         onTap: () {

@@ -4,6 +4,7 @@ import 'package:biodetect/views/session/inicio_sesion.dart';
 import 'package:flutter/material.dart';
 import 'package:biodetect/themes.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -54,6 +55,12 @@ class ProfileScreen extends StatelessWidget {
             child: CircularProgressIndicator(color: AppColors.mintGreen),
           ),
         );
+
+        // Limpiar preferencias de "recordar sesión" - NUEVO
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('auto_login', false);
+        // Mantener email guardado si el usuario lo tenía marcado anteriormente
+        // await prefs.remove('saved_email'); // Opcional: descomentar para limpiar email también
 
         // Cerrar sesión en Firebase
         await FirebaseAuth.instance.signOut();
