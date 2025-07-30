@@ -1,5 +1,6 @@
 import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class RecuperarContrasena extends StatefulWidget {
   const RecuperarContrasena({super.key});
@@ -13,19 +14,60 @@ class _RecuperarContrasenaState extends State<RecuperarContrasena> {
   bool _loading = false;
   String? _error;
 
-  void _onRecuperar() {
+  void _onRecuperar() async {
     setState(() {
       _loading = true;
       _error = null;
     });
-    // Simulación de proceso de recuperación
-    Future.delayed(const Duration(seconds: 2), () {
+
+    final email = _emailController.text.trim();
+
+    if (email.isEmpty) {
       setState(() {
         _loading = false;
-        // Aquí iría la lógica real de recuperación
-        // Si hay error, asigna un mensaje a _error
+        _error = 'Por favor ingresa tu correo electrónico.';
       });
-    });
+      return;
+    }
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      setState(() {
+        _loading = false;
+      });
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Enlace enviado'),
+          content: Text('Se ha enviado un enlace de recuperación a $email. Revisa tu bandeja de entrada y spam.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Cierra el diálogo
+                Navigator.of(context).pop(); // Vuelve al login
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _loading = false;
+        if (e.code == 'user-not-found') {
+          _error = 'No existe una cuenta con este correo.';
+        } else if (e.code == 'invalid-email') {
+          _error = 'El correo no es válido.';
+        } else {
+          _error = e.message ?? 'Error al enviar el correo de recuperación.';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Error inesperado: $e';
+      });
+    }
   }
 
   @override
