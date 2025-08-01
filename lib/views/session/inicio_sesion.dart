@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:shared_preferences/shared_preferences.dart'; 
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:biodetect/views/user/recuperar_contrasena.dart';
 import 'package:biodetect/views/session/registro.dart';
 import 'package:biodetect/menu.dart';
@@ -42,7 +42,7 @@ class _InicioSesionState extends State<InicioSesion> {
     final prefs = await SharedPreferences.getInstance();
     final savedEmail = prefs.getString('saved_email') ?? '';
     final rememberMe = prefs.getBool('remember_me') ?? false;
-    
+
     setState(() {
       _remember = rememberMe;
       if (rememberMe && savedEmail.isNotEmpty) {
@@ -55,10 +55,10 @@ class _InicioSesionState extends State<InicioSesion> {
   Future<void> _checkAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
     final autoLogin = prefs.getBool('auto_login') ?? false;
-    
+
     // Verificar si hay usuario logueado en Firebase
     final user = FirebaseAuth.instance.currentUser;
-    
+
     if (autoLogin && user != null) {
       // Si está marcado "recordar sesión" y hay usuario activo, ir al menu
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -75,7 +75,7 @@ class _InicioSesionState extends State<InicioSesion> {
   // Guardar preferencias de "recordar sesión"
   Future<void> _saveRememberPreference(String email, bool remember) async {
     final prefs = await SharedPreferences.getInstance();
-    
+
     if (remember) {
       // Guardar email y preferencias
       await prefs.setString('saved_email', email);
@@ -98,7 +98,7 @@ class _InicioSesionState extends State<InicioSesion> {
 
     try {
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      
+
       if (googleUser == null) {
         setState(() {
           _loading = false;
@@ -119,7 +119,7 @@ class _InicioSesionState extends State<InicioSesion> {
         // Crear/actualizar documento del usuario
         final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
         final docSnapshot = await userDoc.get();
-        
+
         if (!docSnapshot.exists) {
           await userDoc.set({
             'uid': user.uid,
@@ -187,20 +187,30 @@ class _InicioSesionState extends State<InicioSesion> {
       _loading = true;
       _error = null;
     });
-    
+
     try {
       final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      
+
       final user = credential.user;
       if (user != null) {
         // Crear/actualizar documento del usuario
         final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
         final docSnapshot = await userDoc.get();
-        
-        if (!docSnapshot.exists) {
+
+        // Actualiza el correo en Firestore si es diferente
+        if (docSnapshot.exists) {
+          final data = docSnapshot.data();
+          if (data != null && data['email'] != user.email) {
+            await userDoc.update({'email': user.email});
+          }
+          // Actualiza la fecha de login
+          await userDoc.update({
+            'loginAt': FieldValue.serverTimestamp(),
+          });
+        } else {
           await userDoc.set({
             'uid': user.uid,
             'email': user.email,
@@ -210,10 +220,16 @@ class _InicioSesionState extends State<InicioSesion> {
             'loginAt': FieldValue.serverTimestamp(),
             'badges': [],
           });
-        } else {
-          await userDoc.update({
-            'loginAt': FieldValue.serverTimestamp(),
+        }
+
+        // Verificar si el correo está verificado
+        if (!user.emailVerified) {
+          await user.sendEmailVerification();
+          setState(() {
+            _error = 'Debes verificar tu correo antes de continuar. Te hemos reenviado el enlace de verificación.';
           });
+          await FirebaseAuth.instance.signOut();
+          return;
         }
 
         // Guardar preferencias si "recordar sesión" está marcado
@@ -234,16 +250,19 @@ class _InicioSesionState extends State<InicioSesion> {
             _error = 'No existe una cuenta con este correo.';
             break;
           case 'wrong-password':
-            _error = 'Contraseña incorrecta.';
+            _error = 'La contraseña es incorrecta.';
             break;
           case 'invalid-email':
             _error = 'El correo no es válido.';
             break;
+          case 'invalid-credential':
+            _error = 'Correo o contraseña incorrectos.';
+            break;
           case 'too-many-requests':
-            _error = 'Demasiados intentos fallidos. Intenta más tarde.';
+            _error = 'Demasiados intentos fallidos. Intenta de nuevo más tarde.';
             break;
           default:
-            _error = e.message ?? 'Error al iniciar sesión.';
+            _error = 'No se pudo iniciar sesión. Verifica tus datos e inténtalo de nuevo.';
         }
       });
     } catch (e) {
@@ -314,7 +333,7 @@ class _InicioSesionState extends State<InicioSesion> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                              color: AppColors.textWhite.withOpacity(0.7),
+                              color: AppColors.textWhite.withValues(alpha: 0.7),
                             ),
                             onPressed: () {
                               setState(() {
@@ -362,7 +381,7 @@ class _InicioSesionState extends State<InicioSesion> {
                               child: Icon(
                                 Icons.info_outline,
                                 size: 16,
-                                color: AppColors.textWhite.withOpacity(0.7),
+                                color: AppColors.textWhite.withValues(alpha: 0.7),
                               ),
                             ),
                           ),
