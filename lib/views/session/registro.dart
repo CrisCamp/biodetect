@@ -78,13 +78,26 @@ class _RegistroState extends State<Registro> {
           'loginAt': FieldValue.serverTimestamp(),
           'badges': [],
         });
+        await user.sendEmailVerification();
         if (mounted) {
           Navigator.pop(context);
         }
       }
     } on FirebaseAuthException catch (e) {
       setState(() {
-        _error = e.message ?? 'Error al registrar usuario.';
+        switch (e.code) {
+          case 'email-already-in-use':
+            _error = 'Ya existe una cuenta con este correo.';
+            break;
+          case 'invalid-email':
+            _error = 'El correo no es válido.';
+            break;
+          case 'weak-password':
+            _error = 'La contraseña es demasiado débil.';
+            break;
+          default:
+            _error = 'No se pudo crear la cuenta. Verifica tus datos e inténtalo de nuevo.';
+        }
       });
     } catch (e) {
       setState(() {
@@ -146,7 +159,7 @@ class _RegistroState extends State<Registro> {
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 16),
-                        // Campo: Correo
+                      // Campo: Correo
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
@@ -180,7 +193,7 @@ class _RegistroState extends State<Registro> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                              color: AppColors.textWhite.withOpacity(0.7),
+                              color: AppColors.textWhite.withValues(alpha: 0.7),
                             ),
                             onPressed: () {
                               setState(() {
@@ -227,7 +240,7 @@ class _RegistroState extends State<Registro> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscureConfirm ? Icons.visibility_off : Icons.visibility,
-                              color: AppColors.textWhite.withOpacity(0.7),
+                              color: AppColors.textWhite.withValues(alpha: 0.7),
                             ),
                             onPressed: () {
                               setState(() {
