@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:biodetect/views/session/inicio_sesion.dart';
 import 'package:biodetect/views/user/cambiar_contrasena.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class EditarPerfil extends StatefulWidget {
   const EditarPerfil({super.key});
@@ -17,6 +19,7 @@ class _EditarPerfilState extends State<EditarPerfil> {
   final _nombreController = TextEditingController();
   final _correoController = TextEditingController();
   bool _loading = false;
+  String? _profileUrl;
 
   @override
   void initState() {
@@ -32,8 +35,45 @@ class _EditarPerfilState extends State<EditarPerfil> {
     if (data != null) {
       _nombreController.text = data['fullname'] ?? '';
       _correoController.text = data['email'] ?? '';
+      _profileUrl = data['profilePicture'];
     }
     setState(() {});
+  }
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    if (picked != null) {
+      await _uploadProfileImage(picked);
+    }
+  }
+
+  Future<void> _uploadProfileImage(XFile image) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    setState(() => _loading = true);
+    try {
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('profile_pictures/${user.uid}/${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await ref.putData(await image.readAsBytes());
+      final url = await ref.getDownloadURL();
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+        'profilePicture': url,
+      });
+      setState(() {
+        _profileUrl = url;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Foto de perfil actualizada')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al subir imagen: $e')),
+      );
+    } finally {
+      setState(() => _loading = false);
+    }
   }
 
   Future<void> _guardarCambios() async {
@@ -149,7 +189,7 @@ class _EditarPerfilState extends State<EditarPerfil> {
                   key: _formKey,
                   child: Column(
                     children: [
-                      // Foto de perfil editable (icono por defecto)
+                      // Foto de perfil editable
                       Center(
                         child: Stack(
                           children: [
@@ -160,11 +200,12 @@ class _EditarPerfilState extends State<EditarPerfil> {
                               child: CircleAvatar(
                                 radius: 60,
                                 backgroundColor: AppColors.forestGreen,
-                                child: const Icon(
-                                  Icons.person,
-                                  size: 60,
-                                  color: AppColors.slateGrey,
-                                ),
+                                backgroundImage: (_profileUrl != null && _profileUrl!.isNotEmpty)
+                                    ? NetworkImage(_profileUrl!)
+                                    : null,
+                                child: (_profileUrl == null || _profileUrl!.isEmpty)
+                                    ? const Icon(Icons.person, size: 60, color: AppColors.slateGrey)
+                                    : null,
                               ),
                             ),
                             Positioned(
@@ -173,9 +214,7 @@ class _EditarPerfilState extends State<EditarPerfil> {
                               child: FloatingActionButton(
                                 mini: true,
                                 backgroundColor: AppColors.buttonGreen3,
-                                onPressed: () {
-                                  // Acción para editar foto (opcional)
-                                },
+                                onPressed: _loading ? null : _pickImage,
                                 child: const Icon(Icons.edit, color: AppColors.textWhite),
                               ),
                             ),
