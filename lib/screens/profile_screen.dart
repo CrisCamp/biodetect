@@ -184,7 +184,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         backgroundColor: AppColors.forestGreen,
                         backgroundImage: (foto != null && foto.isNotEmpty)
                             ? NetworkImage(foto)
-                            : const AssetImage('assets/ic_default_profile.png') as ImageProvider,
+                            : null,
                         child: foto == null || foto.isEmpty
                             ? const Icon(Icons.person, size: 72, color: AppColors.slateGrey)
                             : null,
