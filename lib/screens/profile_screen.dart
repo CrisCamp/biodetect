@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:async';
 import 'package:biodetect/views/notes/mis_bitacoras.dart';
 import 'package:biodetect/views/user/editar_perfil.dart';
 import 'package:biodetect/views/session/inicio_sesion.dart';
@@ -6,6 +8,7 @@ import 'package:biodetect/themes.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -16,26 +19,76 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   late Future<Map<String, dynamic>> _userDataFuture;
+  bool _hasInternet = true;
+  Timer? _internetTimer;
 
   @override
   void initState() {
     super.initState();
+    _checkInternet();
     _userDataFuture = _loadUserData();
+    _internetTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      _checkInternet();
+    });
+  }
+
+  @override
+  void dispose() {
+    _internetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkInternet() async {
+    try {
+      final result = await InternetAddress.lookup('example.com');
+      if (mounted) {
+        setState(() {
+          _hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _hasInternet = false;
+        });
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw Exception('No hay usuario autenticado');
 
-    // Obtener datos del usuario
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-    final userData = userDoc.data() ?? {};
+    DocumentSnapshot userDoc;
+    DocumentSnapshot activityDoc;
 
-    // Obtener estadísticas de actividad
-    final activityDoc = await FirebaseFirestore.instance.collection('user_activity').doc(user.uid).get();
-    final activityData = activityDoc.data() ?? {};
+    try {
+      userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
+      activityDoc = await FirebaseFirestore.instance
+          .collection('user_activity')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
+    } catch (e) {
+      userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.cache));
+      activityDoc = await FirebaseFirestore.instance
+          .collection('user_activity')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.cache));
+    }
 
-    // Obtener insignias (detalles)
+    final Map<String, dynamic> userData = userDoc.data() is Map<String, dynamic>
+        ? userDoc.data() as Map<String, dynamic>
+        : <String, dynamic>{};
+    final Map<String, dynamic> activityData = activityDoc.data() is Map<String, dynamic>
+        ? activityDoc.data() as Map<String, dynamic>
+        : <String, dynamic>{};
+
     List<Map<String, dynamic>> badgesData = [];
     if (userData['badges'] != null && userData['badges'] is List) {
       final badgeIds = List<String>.from(userData['badges']);
@@ -44,7 +97,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             .collection('badges')
             .where(FieldPath.documentId, whereIn: badgeIds)
             .get();
-        badgesData = badgesSnap.docs.map((doc) => doc.data()).toList();
+        badgesData = badgesSnap.docs
+            .map((doc) => Map<String, dynamic>.from(doc.data() as Map))
+            .toList();
       }
     }
 
@@ -147,9 +202,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
             }
             if (snapshot.hasError) {
               return Center(
-                child: Text(
-                  'Error al cargar perfil: ${snapshot.error}',
-                  style: const TextStyle(color: AppColors.warning),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Error al cargar perfil: ${snapshot.error}',
+                      style: const TextStyle(color: AppColors.warning),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          _userDataFuture = _loadUserData();
+                        });
+                      },
+                      child: const Text('Reintentar'),
+                    ),
+                    const SizedBox(height: 8),
+                    if (snapshot.error.toString().contains('unavailable'))
+                      const Text(
+                        'El servicio de Firestore está temporalmente fuera de línea. Intenta de nuevo más tarde.',
+                        style: TextStyle(color: AppColors.warning, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                  ],
                 ),
               );
             }
@@ -170,11 +246,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
               children: [
                 const SizedBox(height: 32),
-                // Sección 1: Header
                 Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Foto de perfil
                     Card(
                       shape: const CircleBorder(),
                       color: Colors.transparent,
@@ -182,16 +256,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: CircleAvatar(
                         radius: 75,
                         backgroundColor: AppColors.forestGreen,
-                        backgroundImage: (foto != null && foto.isNotEmpty)
-                            ? NetworkImage(foto)
-                            : null,
-                        child: foto == null || foto.isEmpty
-                            ? const Icon(Icons.person, size: 72, color: AppColors.slateGrey)
-                            : null,
+                        child: (foto != null && foto.isNotEmpty)
+                          ? ClipOval(
+                              child: CachedNetworkImage(
+                                imageUrl: foto,
+                                width: 150,
+                                height: 150,
+                                fit: BoxFit.cover,
+                                errorWidget: (context, url, error) =>
+                                  const Icon(Icons.person, size: 72, color: AppColors.slateGrey),
+                                placeholder: (context, url) =>
+                                  const CircularProgressIndicator(),
+                              ),
+                            )
+                          : const Icon(Icons.person, size: 72, color: AppColors.slateGrey),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Nombre
                     Text(
                       nombre,
                       style: const TextStyle(
@@ -200,7 +281,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    // Correo + verificación
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -221,7 +301,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ],
                 ),
                 const SizedBox(height: 32),
-                // Sección 2: Estadísticas
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(
@@ -248,7 +327,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
                 const SizedBox(height: 32),
-                // Sección 2.1: Insignias (opcional, muestra iconos)
                 if (badges.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -278,7 +356,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 if (badges.isNotEmpty) const SizedBox(height: 32),
-                // Sección 3: Acciones
                 Column(
                   children: [
                     _AccionPerfilTile(
@@ -296,26 +373,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       trailing: Icons.arrow_forward_ios,
                     ),
                     _DividerPerfil(),
-                    _AccionPerfilTile(
-                      icon: Icons.settings,
-                      iconColor: AppColors.textBlueNormal,
-                      label: "Editar Perfil",
-                      onTap: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const EditarPerfil(),
-                          ),
-                        );
-                        if (result == true) {
-                          setState(() {
-                            _userDataFuture = _loadUserData();
-                          });
-                        }
-                      },
-                      trailing: Icons.arrow_forward_ios,
-                    ),
-                    _DividerPerfil(),
+                    if (_hasInternet)
+                      _AccionPerfilTile(
+                        icon: Icons.settings,
+                        iconColor: AppColors.textBlueNormal,
+                        label: "Editar Perfil",
+                        onTap: () async {
+                          final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const EditarPerfil(),
+                            ),
+                          );
+                          if (result == true) {
+                            setState(() {
+                              _userDataFuture = _loadUserData();
+                            });
+                          }
+                        },
+                        trailing: Icons.arrow_forward_ios,
+                      ),
+                    if (_hasInternet) _DividerPerfil(),
                     _AccionPerfilTile(
                       icon: Icons.logout,
                       iconColor: AppColors.warning,
