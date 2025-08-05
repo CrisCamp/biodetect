@@ -238,7 +238,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             final String correo = user['email'] ?? 'Correo no disponible';
             final String? foto = user['profilePicture'];
             final bool verificado = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
-            final int identificaciones = activity['speciesIdentified']?['total'] ?? 0;
+            final int identificaciones = activity['speciesIdentified.total'] ?? 0;
             final int bitacoras = activity['fieldNotesCreated'] ?? 0;
             final int insignias = (user['badges'] as List?)?.length ?? 0;
 
