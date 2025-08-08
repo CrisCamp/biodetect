@@ -3,66 +3,6 @@ import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/datos.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-
-class PhotoService {
-  static Future<Map<String, dynamic>> uploadAndRegisterPhoto(File imageFile, String userId) async {
-    final photoId = FirebaseFirestore.instance.collection('insect_photos').doc().id;
-    final ref = FirebaseStorage.instance.ref().child('insect_photos/$userId/original/$photoId.jpg');
-    await ref.putFile(imageFile);
-    final imageUrl = await ref.getDownloadURL();
-
-    final docRef = FirebaseFirestore.instance.collection('insect_photos').doc(photoId);
-    await docRef.set({
-      'userId': userId,
-      'imageUrl': imageUrl,
-      'localPath': imageFile.path,
-      'uploadedAt': FieldValue.serverTimestamp(),
-      'class': '',
-      'taxonOrder': '',
-      'name': '',
-      'coords': {},
-      'habitat': '',
-      'verificationDate': null,
-      'details': '',
-      'notes': '',
-      'driveFolderId': '',
-    });
-    return {'photoId': photoId, 'imageUrl': imageUrl, 'docRef': docRef};
-  }
-
-  static Future<Map<String, dynamic>> analyzePhotoWithIA(String imageUrl) async {
-    await Future.delayed(const Duration(seconds: 2));
-    bool recognized = true; // TODO: Integrar IA real
-
-    if (recognized) {
-      return {
-        'success': true,
-        'taxonOrder': 'Lepidoptera',
-      };
-    } else {
-      return {
-        'success': false,
-        'message': 'No se pudo identificar el orden taxonómico',
-      };
-    }
-  }
-
-  static Future<void> saveUnidentifiedPhoto({
-    required String userId,
-    required String imageUrl,
-    required String photoId,
-  }) async {
-    await FirebaseFirestore.instance.collection('unidentified_photos').doc(photoId).set({
-      'userId': userId,
-      'imageUrl': imageUrl,
-      'uploadedAt': FieldValue.serverTimestamp(),
-      'status': 'pending',
-    });
-  }
-}
 
 class CapturaFoto extends StatefulWidget {
   const CapturaFoto({super.key});
@@ -106,60 +46,38 @@ class _CapturaFotoState extends State<CapturaFoto> {
       setState(() => _isProcessing = false);
       return;
     }
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Debes iniciar sesión para continuar.')),
-      );
-      setState(() => _isProcessing = false);
-      return;
-    }
 
     try {
-      final result = await PhotoService.uploadAndRegisterPhoto(_image!, user.uid);
-      final photoId = result['photoId'];
-      final imageUrl = result['imageUrl'];
-      final docRef = result['docRef'];
+      // Simular análisis de IA
+      await Future.delayed(const Duration(seconds: 2));
+      
+      // Resultado simulado - aquí integrarás tu IA real
+      const String ordenTaxonomico = 'Lepidoptera';
 
-      final iaResult = await PhotoService.analyzePhotoWithIA(imageUrl);
-
-      if (iaResult['success'] == true && iaResult['taxonOrder'] != null && iaResult['taxonOrder'].toString().isNotEmpty) {   
-        await docRef.update({
-          'taxonOrder': iaResult['taxonOrder'],
-          'verificationDate': FieldValue.serverTimestamp(),
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Orden taxonómico reconocido: ${iaResult['taxonOrder']}'),
-              backgroundColor: AppColors.buttonGreen2,
-            ),
-          );
-          await Future.delayed(const Duration(milliseconds: 800));
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => RegDatos(
-                photoId: photoId,
-                imageUrl: imageUrl,
-                ordenTaxonomico: iaResult['taxonOrder'],
-              ),
-            ),
-          );
-        }
-      } else {
-        await PhotoService.saveUnidentifiedPhoto(
-          userId: user.uid,
-          imageUrl: imageUrl,
-          photoId: photoId,
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Orden taxonómico reconocido: Lepidoptera'),
+            backgroundColor: AppColors.buttonGreen2,
+          ),
         );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No se pudo identificar el orden taxonómico. Tu foto será revisada por un administrador.'),      
-              backgroundColor: AppColors.warning,
+        await Future.delayed(const Duration(milliseconds: 800));
+        
+        final result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => RegDatos(
+              imageFile: _image!,
+              ordenTaxonomico: ordenTaxonomico,
             ),
-          );
+          ),
+        );
+        
+        // Si se guardó correctamente, limpiar la imagen
+        if (result == 'saved') {
+          setState(() {
+            _image = null;
+          });
         }
       }
     } catch (e) {
@@ -289,11 +207,11 @@ class _CapturaFotoState extends State<CapturaFoto> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
+                    child: const Padding(
+                      padding: EdgeInsets.all(16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Text(
                             'Asegúrate de:',
                             style: TextStyle(
@@ -329,7 +247,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
                     ),
                   ),
                   const SizedBox(height: 30),
-                  // Botón para ir a la vista de datos (como ventana flotante)
+                  // Botón para ir a la vista de datos
                   ElevatedButton.icon(
                     icon: _isProcessing
                         ? const SizedBox(
@@ -367,9 +285,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
                       elevation: MaterialStateProperty.all(_isProcessing ? 0 : 4),
                       shadowColor: MaterialStateProperty.all(AppColors.buttonBlue2),
                     ),
-                    onPressed: _isProcessing ? null : () async {
-                      await _analizarFoto();
-                    },
+                    onPressed: _isProcessing ? null : _analizarFoto,
                   ),
                 ],
               ),
