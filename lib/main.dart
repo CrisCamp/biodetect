@@ -4,13 +4,18 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:biodetect/menu.dart';
 import 'package:biodetect/views/session/inicio_sesion.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inicializar Firebase (configuración básica)
+  // Configurar Mapbox access token
+  const String mapboxAccessToken = "pk.eyJ1IjoiZmVybHVpczIzIiwiYSI6ImNtZTMybW96djAyc3EybG9oeTFncjc0bGIifQ.Ij6dRhnHFAex52P017NMCw";
+  mapbox.MapboxOptions.setAccessToken(mapboxAccessToken);
+  
+  // Inicializar Firebase
   await Firebase.initializeApp();
   
   // Habilitar persistencia de Firestore para cache offline
@@ -74,14 +79,12 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     
-    // Intentar sincronizar cuando la app regrese al primer plano
     if (state == AppLifecycleState.resumed) {
       _attemptSync();
     }
   }
 
   Future<void> _initializeApp() async {
-    // Esperar un momento para que Firebase se inicialice completamente
     await Future.delayed(const Duration(milliseconds: 500));
     
     final user = FirebaseAuth.instance.currentUser;
@@ -117,7 +120,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // Mostrar pantalla de carga mientras se verifica la autenticación
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             backgroundColor: Colors.white,
@@ -129,9 +131,7 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
           );
         }
         
-        // Usuario autenticado
         if (snapshot.hasData && snapshot.data != null) {
-          // Intentar sincronizar solo una vez después del login
           if (!_hasCheckedSync) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _attemptSync();
@@ -141,7 +141,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
           return const MainMenu();
         }
         
-        // Usuario no autenticado
         return const InicioSesion();
       },
     );

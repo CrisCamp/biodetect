@@ -5,6 +5,16 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Agregar estas líneas para Mapbox
+import java.util.Properties
+import java.io.FileInputStream
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+
 android {
     namespace = "com.example.biodetect"
     compileSdk = flutter.compileSdkVersion
@@ -19,6 +29,11 @@ android {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
+    // Agregar esta sección para habilitar buildConfig
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.biodetect"
@@ -28,6 +43,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        
+        // Agregar esta línea para Mapbox
+        buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"${localProperties.getProperty("MAPBOX_ACCESS_TOKEN") ?: ""}\"")
     }
 
     buildTypes {
