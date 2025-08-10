@@ -464,12 +464,13 @@ class _DetalleRegistroState extends State<DetalleRegistro> {
                                   );
                                   return;
                                 }
-                                
+
                                 final result = await Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (context) => RegDatos(
                                       photoId: _registro['photoId'],
                                       imageUrl: _registro['imageUrl'],
+                                      claseArtropodo: _registro['class'] ?? '',
                                       ordenTaxonomico: _registro['taxonOrder'] ?? '',
                                       datosIniciales: datosParaEdicion,
                                     ),

@@ -12,6 +12,7 @@ class RegDatos extends StatefulWidget {
   final File? imageFile;
   final String? photoId;
   final String? imageUrl;
+  final String claseArtropodo;
   final String ordenTaxonomico;
   final Map<String, dynamic>? datosIniciales;
 
@@ -20,6 +21,7 @@ class RegDatos extends StatefulWidget {
     this.imageFile,
     this.photoId,
     this.imageUrl,
+    required this.claseArtropodo,
     required this.ordenTaxonomico,
     this.datosIniciales,
   });
@@ -45,12 +47,13 @@ class _RegDatosState extends State<RegDatos> {
   @override
   void initState() {
     super.initState();
+    className = widget.claseArtropodo;
     taxonOrder = widget.ordenTaxonomico;
     _isEditing = widget.photoId != null;
     currentImageUrl = widget.imageUrl;
-    
+
     _checkInternetConnection();
-    
+
     if (widget.datosIniciales != null) {
       _loadDatosFromParam();
     } else if (_isEditing) {
@@ -341,23 +344,6 @@ class _RegDatosState extends State<RegDatos> {
                           // Formulario
                           Column(
                             children: [
-                              // Orden taxonómico SOLO LECTURA
-                              TextFormField(
-                                initialValue: taxonOrder,
-                                enabled: !_isProcessing,
-                                decoration: InputDecoration(
-                                  labelText: 'Orden taxonómico',
-                                  filled: true,
-                                  fillColor: AppColors.paleGreen,
-                                  labelStyle: const TextStyle(color: AppColors.textWhite),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                style: const TextStyle(color: AppColors.textWhite),
-                                readOnly: true,
-                              ),
-                              const SizedBox(height: 16),
                               // Clase
                               TextFormField(
                                 initialValue: className,
@@ -373,6 +359,23 @@ class _RegDatosState extends State<RegDatos> {
                                   ),
                                 ),
                                 style: const TextStyle(color: AppColors.textWhite),
+                              ),
+                              const SizedBox(height: 16),
+                              // Orden taxonómico SOLO LECTURA
+                              TextFormField(
+                                initialValue: taxonOrder,
+                                enabled: !_isProcessing,
+                                decoration: InputDecoration(
+                                  labelText: 'Orden taxonómico',
+                                  filled: true,
+                                  fillColor: AppColors.paleGreen,
+                                  labelStyle: const TextStyle(color: AppColors.textWhite),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                style: const TextStyle(color: AppColors.textWhite),
+                                readOnly: true,
                               ),
                               const SizedBox(height: 16),
                               // Ubicación
