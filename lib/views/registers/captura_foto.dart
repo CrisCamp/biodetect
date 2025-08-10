@@ -1,8 +1,14 @@
 import 'dart:io';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/datos.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 class CapturaFoto extends StatefulWidget {
   const CapturaFoto({super.key});
@@ -48,49 +54,152 @@ class _CapturaFotoState extends State<CapturaFoto> {
     }
 
     try {
-      // Simular análisis de IA
-      await Future.delayed(const Duration(seconds: 2));
-      
-      // Resultado simulado - aquí integrarás tu IA real
-      const String ordenTaxonomico = 'Lepidoptera';
+      // Convertir la imagen a bytes
+      final bytes = await _image!.readAsBytes();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Orden taxonómico reconocido: Lepidoptera'),
-            backgroundColor: AppColors.buttonGreen2,
-          ),
-        );
-        await Future.delayed(const Duration(milliseconds: 800));
-        
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => RegDatos(
-              imageFile: _image!,
-              ordenTaxonomico: ordenTaxonomico,
-            ),
-          ),
-        );
-        
-        // Si se guardó correctamente, limpiar la imagen
-        if (result == 'saved') {
-          setState(() {
-            _image = null;
-          });
+      // Crear la solicitud multipart
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://192.168.100.3:5000/predict'), // Aquí cambia tu IP por la de tu máquina
+      );
+
+      // Agregar la imagen al request
+      request.files.add(http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: 'image.jpg',
+        contentType: MediaType('image', 'jpg'),
+      ));
+
+      // Enviar la solicitud
+      final response = await request.send();
+
+      // Verificar el estado de la respuesta
+      if (response.statusCode == 200) {
+        final responseData = await response.stream.bytesToString();
+        final jsonResponse = jsonDecode(responseData);
+
+        final String ordenTaxonomico = jsonResponse['predicted_class'];
+        List<String> taxonomia = ordenTaxonomico.split('-');
+        final double confianza = jsonResponse['confidence'];
+
+        if (mounted) {
+          String claseArtropodo = '';
+          String ordenTaxonomico = '';
+          String mensaje = '';
+          if (confianza >= 0.75) {
+            claseArtropodo = taxonomia[0];
+            ordenTaxonomico = taxonomia[1];
+            //mensaje = 'Clase: $claseArtropodo. Orden: $ordenTaxonomico.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Clase: $claseArtropodo. Orden: $ordenTaxonomico.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)'),
+                backgroundColor: AppColors.buttonGreen2,
+              ),
+            );
+
+            await Future.delayed(const Duration(milliseconds: 1000));
+
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => RegDatos(
+                  imageFile: _image!,
+                  claseArtropodo: taxonomia[0],  // "Insecta"
+                  ordenTaxonomico: taxonomia[1], // "Orthoptera"
+                ),
+              ),
+            );
+
+            // Si se guardó correctamente, limpiar la imagen
+            if (result == 'saved') {
+              setState(() {
+                _image = null;
+              });
+            }
+          } else {
+            if (mounted) {
+              showDialog<void>(
+                context: context,
+                barrierDismissible: false, // El usuario debe seleecionar un botón para cerrar
+                builder: (BuildContext dialogContext) {
+                  return AlertDialog(
+                    title: const Text('Confianza Insuficiente'),
+                    content: const SingleChildScrollView(
+                      child: ListBody(
+                        children: <Widget>[
+                          Text('No se alcanzó el nivel de confianza adecuado para la identificación automática.'),
+                        ],
+                      ),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        child: const Text('Aceptar'),
+                        onPressed: () {
+                          Navigator.of(dialogContext).pop(); // Cierra el diálogo
+                        },
+                      ),
+                      TextButton(
+                        child: const Text('Enviar para revisión'),
+                        onPressed: () {
+                          Navigator.of(dialogContext).pop(); // Cierra el diálogo
+                          _enviarRevision();
+                        },
+                      ),
+                    ],
+                  );
+                },
+              );
+            }
+          }
+
         }
+      } else {
+        final errorData = await response.stream.bytesToString();
+        final errorJson = jsonDecode(errorData);
+        throw Exception(errorJson['error'] ?? 'Error desconocido del servidor');
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al procesar la foto: $e'),
+            content: Text('Error al procesar la foto: ${e.toString()}'),
             backgroundColor: AppColors.warning,
           ),
         );
       }
     }
+
     if (mounted) setState(() => _isProcessing = false);
+  }
+
+  Future<void> _enviarRevision() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
+
+    // Subir imagen a Storage
+    final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
+    await ref.putFile(_image!);
+    final imageUrl = await ref.getDownloadURL();
+
+    // Crear documento en Firestore
+    await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
+      'userId': user.uid,
+      'imageUrl': imageUrl,
+      'uploadedAt': FieldValue.serverTimestamp(),
+      'status': 'Pending'
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gracias por su apoyo.'),
+          backgroundColor: AppColors.buttonGreen2,
+        ),
+      );
+    }
   }
 
   @override
