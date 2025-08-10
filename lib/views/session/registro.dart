@@ -79,6 +79,8 @@ class _RegistroState extends State<Registro> {
           'badges': [],
         });
         await user.sendEmailVerification();
+
+        await credential.user?.updateDisplayName(_nombreController.text.trim());
         if (mounted) {
           Navigator.pop(context);
         }
