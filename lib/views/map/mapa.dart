@@ -1,11 +1,11 @@
 import 'package:biodetect/themes.dart';
-import 'package:biodetect/services/sync_service.dart';
 import 'package:biodetect/views/registers/detalle_registro.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MapaIterativoScreen extends StatefulWidget {
   const MapaIterativoScreen({super.key});
@@ -107,30 +107,29 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      final combinedPhotos = await SyncService.getCombinedPhotos(user.uid);
+      // Consultar directamente desde Firestore con cache
+      final query = await FirebaseFirestore.instance
+          .collection('insect_photos')
+          .where('userId', isEqualTo: user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
 
       List<Map<String, dynamic>> photosWithCoords = [];
 
-      for (final entry in combinedPhotos.entries) {
-        for (final photo in entry.value) {
-          double? lat, lon;
-          // Para registros online
-          if (photo['coords'] != null && photo['coords']['x'] != null && photo['coords']['y'] != null) {
-            lat = photo['coords']['x'];
-            lon = photo['coords']['y'];
-          }
-          // Para registros offline
-          else if (photo['coordsX'] != null && photo['coordsY'] != null) {
-            lat = photo['coordsX'];
-            lon = photo['coordsY'];
-          }
-          // Solo si las coordenadas existen y son válidas
+      for (final doc in query.docs) {
+        final data = doc.data();
+        double? lat, lon;
+        
+        if (data['coords'] != null && data['coords']['x'] != null && data['coords']['y'] != null) {
+          lat = data['coords']['x'];
+          lon = data['coords']['y'];
+          
           if (lat != null && lon != null && lat != 0 && lon != 0) {
             photosWithCoords.add({
-              ...photo,
+              ...data,
               'lat': lat,
               'lon': lon,
-              'taxonOrder': entry.key,
+              'taxonOrder': data['taxonOrder'],
+              'photoId': doc.id,
             });
           }
         }
@@ -141,13 +140,10 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
         _isLoading = false;
       });
 
-      print('Fotos cargadas para el mapa: ${_userPhotos.length}');
-
       if (pointAnnotationManager != null) {
         await _addPhotoMarkers();
       }
     } catch (e) {
-      print('Error cargando fotos: $e');
       setState(() {
         _isLoading = false;
       });
@@ -168,7 +164,6 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       
       for (int i = 0; i < _userPhotos.length; i++) {
         final photo = _userPhotos[i];
-        final isOnline = photo['isOnline'] ?? false;
 
         final annotation = mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(
@@ -179,12 +174,11 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
           ),
           textField: photo['taxonOrder'] ?? 'Registro',
           textSize: 12.0,
-          textColor: Colors.white.value,
-          textHaloColor: Colors.black.value,
+          textColor: Colors.white.toARGB32(),
+          textHaloColor: Colors.black.toARGB32(),
           textHaloWidth: 2.0,
           iconSize: 1.5,
-          // Color diferente para registros locales y remotos
-          iconColor: isOnline ? AppColors.buttonGreen2.value : AppColors.buttonBrown3.value,
+          iconColor: AppColors.buttonGreen2.toARGB32(),
         );
         
         annotations.add(annotation);
@@ -236,10 +230,8 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       pointAnnotationManager = await mapboxMap.annotations.createPointAnnotationManager();
       print('PointAnnotationManager creado');
       
-      // Configurar listener para taps en marcadores - Versión corregida
-      pointAnnotationManager!.addOnPointAnnotationClickListener(
-        _AnnotationClickListener((annotation) => _onAnnotationTapped(annotation))
-      );
+      // Configurar listener para taps en marcadores usando la API que funciona
+      pointAnnotationManager!.addOnPointAnnotationClickListener(_AnnotationClickListener(this));
       
       // Habilitar componente de ubicación
       if (_hasLocationPermission) {
@@ -318,7 +310,7 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Cámara inicial basada en ubicación actual o por defecto
+    // Cámara inicial basada ÚNICAMENTE en ubicación actual del usuario
     mapbox.CameraOptions initialCamera = mapbox.CameraOptions(
       center: _currentPosition != null
           ? mapbox.Point(
@@ -328,9 +320,9 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
               ),
             )
           : mapbox.Point(
-              coordinates: mapbox.Position.named(lng: -99.1332, lat: 19.4326), // Ciudad de México
+              coordinates: mapbox.Position.named(lng: 0, lat: 0), // Ubicación temporal hasta obtener la real
             ),
-      zoom: _currentPosition != null ? 15.0 : 10.0,
+      zoom: _currentPosition != null ? 15.0 : 2.0, // Zoom bajo si no hay ubicación
       bearing: 0,
       pitch: 0,
     );
@@ -361,19 +353,18 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
                             'Mapa Interactivo',
                             style: TextStyle(
                               color: AppColors.textWhite,
-                              fontSize: 24,
+                              fontSize: 20,
                               fontWeight: FontWeight.bold,
                             ),
                             textAlign: TextAlign.center,
                           ),
-                          if (!_isLoading)
-                            Text(
-                              '${_userPhotos.length} registros con ubicación',
-                              style: const TextStyle(
-                                color: AppColors.textPaleGreen,
-                                fontSize: 12,
-                              ),
+                          Text(
+                            '${_userPhotos.length} registros en el mapa',
+                            style: const TextStyle(
+                              color: AppColors.textPaleGreen,
+                              fontSize: 12,
                             ),
+                          ),
                         ],
                       ),
                     ),
@@ -400,41 +391,24 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
                         key: const ValueKey("mapbox_map"),
                         cameraOptions: initialCamera,
                         onMapCreated: _onMapCreated,
-                        styleUri: mapbox.MapboxStyles.OUTDOORS, // Cambiar a un estilo más simple
+                        styleUri: mapbox.MapboxStyles.OUTDOORS,
                       ),
                     ),
                     
                     // Indicador de error del mapa
                     if (_mapError != null)
                       Container(
-                        color: Colors.red.withOpacity(0.8),
+                        color: Colors.red.withValues(alpha: 0.8),
                         child: Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Icon(Icons.error, color: Colors.white, size: 48),
+                              const Icon(Icons.error_outline, color: Colors.white, size: 50),
                               const SizedBox(height: 16),
-                              const Text(
-                                'Error cargando el mapa',
-                                style: TextStyle(color: Colors.white, fontSize: 18),
-                              ),
-                              const SizedBox(height: 8),
-                              Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Text(
-                                  _mapError!,
-                                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                              ElevatedButton(
-                                onPressed: () {
-                                  setState(() {
-                                    _mapError = null;
-                                  });
-                                  _loadUserPhotos();
-                                },
-                                child: const Text('Reintentar'),
+                              Text(
+                                'Error del mapa: $_mapError',
+                                style: const TextStyle(color: Colors.white),
+                                textAlign: TextAlign.center,
                               ),
                             ],
                           ),
@@ -446,21 +420,8 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
                       Container(
                         color: Colors.black26,
                         child: const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              CircularProgressIndicator(
-                                color: AppColors.buttonGreen2,
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                'Cargando registros...',
-                                style: TextStyle(
-                                  color: AppColors.textWhite,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ],
+                          child: CircularProgressIndicator(
+                            color: AppColors.buttonGreen2,
                           ),
                         ),
                       ),
@@ -471,60 +432,10 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
                       right: 24,
                       child: FloatingActionButton(
                         backgroundColor: AppColors.buttonGreen3,
-                        foregroundColor: AppColors.textBlack,
-                        onPressed: _centerOnCurrentLocation,
-                        heroTag: "center_location",
                         child: Icon(_hasLocationPermission ? Icons.my_location : Icons.location_disabled),
+                        onPressed: _centerOnCurrentLocation,
                       ),
                     ),
-                    
-                    // Panel de información
-                    if (_userPhotos.isNotEmpty)
-                      Positioned(
-                        top: 16,
-                        left: 16,
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundCard.withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Instrucciones:',
-                                style: TextStyle(
-                                  color: AppColors.textWhite,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 12,
-                                    height: 12,
-                                    decoration: const BoxDecoration(
-                                      color: AppColors.buttonGreen2,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  const Text(
-                                    'Toca un marcador para ver detalles',
-                                    style: TextStyle(
-                                      color: AppColors.textWhite,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -537,19 +448,19 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
 
   @override
   void dispose() {
+    // No necesitamos limpiar listeners con esta API
     super.dispose();
   }
 }
 
-// Clase auxiliar para manejar los clicks en anotaciones
+// Añadir la clase listener al final del archivo
 class _AnnotationClickListener extends mapbox.OnPointAnnotationClickListener {
-  final Function(mapbox.PointAnnotation) onTap;
-  
-  _AnnotationClickListener(this.onTap);
-  
+  final _MapaIterativoScreenState mapState;
+
+  _AnnotationClickListener(this.mapState);
+
   @override
-  bool onPointAnnotationClick(mapbox.PointAnnotation annotation) {
-    onTap(annotation);
-    return true; // Consume el evento
+  void onPointAnnotationClick(mapbox.PointAnnotation annotation) {
+    mapState._onAnnotationTapped(annotation);
   }
 }

@@ -1,14 +1,15 @@
 import 'dart:io';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/datos.dart';
+import 'package:biodetect/services/pending_photos_service.dart';
+import 'package:biodetect/services/ai_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter/foundation.dart'; // Para kDebugMode
 
 class CapturaFoto extends StatefulWidget {
   const CapturaFoto({super.key});
@@ -20,6 +21,52 @@ class CapturaFoto extends StatefulWidget {
 class _CapturaFotoState extends State<CapturaFoto> {
   File? _image;
   bool _isProcessing = false;
+  bool _hasInternet = true;
+  Position? _currentPosition;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkInternetConnection();
+    _getCurrentLocation();
+  }
+
+  Future<void> _checkInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup('google.com');
+      setState(() {
+        _hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      });
+    } catch (_) {
+      setState(() {
+        _hasInternet = false;
+      });
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.whileInUse || 
+          permission == LocationPermission.always) {
+        final Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+        setState(() {
+          _currentPosition = position;
+        });
+      }
+    } catch (e) {
+      // Cambiar print por debugPrint
+      if (kDebugMode) {
+        debugPrint('Error obteniendo ubicación: $e');
+      }
+    }
+  }
 
   Future<void> _tomarFoto() async {
     final picker = ImagePicker();
@@ -43,121 +90,75 @@ class _CapturaFotoState extends State<CapturaFoto> {
 
   Future<void> _analizarFoto() async {
     if (_isProcessing) return;
+    if (!mounted) return; // Verificar mounted antes de setState
+    
     setState(() => _isProcessing = true);
 
     if (_image == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Primero selecciona una foto.')),
-      );
-      setState(() => _isProcessing = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Primero selecciona una foto.')),
+        );
+        setState(() => _isProcessing = false);
+      }
+      return;
+    }
+
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) setState(() => _isProcessing = false);
+      return;
+    }
+
+    await _checkInternetConnection();
+
+    if (!_hasInternet) {
+      await _guardarPendiente(user.uid);
       return;
     }
 
     try {
-      // Convertir la imagen a bytes
-      final bytes = await _image!.readAsBytes();
+      final Map<String, dynamic> response = await AIService.analyzeImage(_image!);
 
-      // Crear la solicitud multipart
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('http://192.168.100.3:5000/predict'), // Aquí cambia tu IP por la de tu máquina
-      );
+      final String ordenTaxonomico = response['predicted_class'];
+      final List<String> taxonomia = ordenTaxonomico.split('-');
+      final double confianza = response['confidence'];
 
-      // Agregar la imagen al request
-      request.files.add(http.MultipartFile.fromBytes(
-        'file',
-        bytes,
-        filename: 'image.jpg',
-        contentType: MediaType('image', 'jpg'),
-      ));
+      if (mounted) {
+        if (confianza >= 0.75) {
+          final String claseArtropodo = taxonomia[0];
+          final String ordenTaxonomicoFinal = taxonomia[1];
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Clase: $claseArtropodo. Orden: $ordenTaxonomicoFinal.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)'),
+              backgroundColor: AppColors.buttonGreen2,
+            ),
+          );
 
-      // Enviar la solicitud
-      final response = await request.send();
+          await Future.delayed(const Duration(milliseconds: 1000));
 
-      // Verificar el estado de la respuesta
-      if (response.statusCode == 200) {
-        final responseData = await response.stream.bytesToString();
-        final jsonResponse = jsonDecode(responseData);
-
-        final String ordenTaxonomico = jsonResponse['predicted_class'];
-        List<String> taxonomia = ordenTaxonomico.split('-');
-        final double confianza = jsonResponse['confidence'];
-
-        if (mounted) {
-          String claseArtropodo = '';
-          String ordenTaxonomico = '';
-          String mensaje = '';
-          if (confianza >= 0.75) {
-            claseArtropodo = taxonomia[0];
-            ordenTaxonomico = taxonomia[1];
-            //mensaje = 'Clase: $claseArtropodo. Orden: $ordenTaxonomico.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)';
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Clase: $claseArtropodo. Orden: $ordenTaxonomico.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)'),
-                backgroundColor: AppColors.buttonGreen2,
-              ),
-            );
-
-            await Future.delayed(const Duration(milliseconds: 1000));
-
-            final result = await Navigator.push(
+          if (mounted) {
+            final dynamic result = await Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (context) => RegDatos(
                   imageFile: _image!,
-                  claseArtropodo: taxonomia[0],  // "Insecta"
-                  ordenTaxonomico: taxonomia[1], // "Orthoptera"
+                  claseArtropodo: claseArtropodo,
+                  ordenTaxonomico: ordenTaxonomicoFinal,
                 ),
               ),
             );
 
-            // Si se guardó correctamente, limpiar la imagen
-            if (result == 'saved') {
+            if (result == 'saved' && mounted) {
               setState(() {
                 _image = null;
               });
             }
-          } else {
-            if (mounted) {
-              showDialog<void>(
-                context: context,
-                barrierDismissible: false, // El usuario debe seleecionar un botón para cerrar
-                builder: (BuildContext dialogContext) {
-                  return AlertDialog(
-                    title: const Text('Confianza Insuficiente'),
-                    content: const SingleChildScrollView(
-                      child: ListBody(
-                        children: <Widget>[
-                          Text('No se alcanzó el nivel de confianza adecuado para la identificación automática.'),
-                        ],
-                      ),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        child: const Text('Aceptar'),
-                        onPressed: () {
-                          Navigator.of(dialogContext).pop(); // Cierra el diálogo
-                        },
-                      ),
-                      TextButton(
-                        child: const Text('Enviar para revisión'),
-                        onPressed: () {
-                          Navigator.of(dialogContext).pop(); // Cierra el diálogo
-                          _enviarRevision();
-                        },
-                      ),
-                    ],
-                  );
-                },
-              );
-            }
           }
-
+        } else {
+          await _mostrarOpcionesBajaConfianza();
         }
-      } else {
-        final errorData = await response.stream.bytesToString();
-        final errorJson = jsonDecode(errorData);
-        throw Exception(errorJson['error'] ?? 'Error desconocido del servidor');
       }
     } catch (e) {
       if (mounted) {
@@ -173,32 +174,141 @@ class _CapturaFotoState extends State<CapturaFoto> {
     if (mounted) setState(() => _isProcessing = false);
   }
 
+  Future<void> _guardarPendiente(String userId) async {
+    try {
+      await PendingPhotosService.savePendingPhoto(
+        userId: userId,
+        imageFile: _image!,
+        latitude: _currentPosition?.latitude,
+        longitude: _currentPosition?.longitude,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto guardada como pendiente. Se clasificará cuando tengas conexión.'),
+            backgroundColor: AppColors.buttonBrown3,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        
+        setState(() {
+          _image = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al guardar: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    }
+
+    if (mounted) setState(() => _isProcessing = false);
+  }
+
+  Future<void> _mostrarOpcionesBajaConfianza() async {
+    if (!mounted) return;
+    
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.backgroundCard,
+          title: const Text(
+            'Confianza Insuficiente',
+            style: TextStyle(color: AppColors.textWhite),
+          ),
+          content: const Text(
+            'No se alcanzó el nivel de confianza adecuado para la identificación automática.',
+            style: TextStyle(color: AppColors.textWhite),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text(
+                'Guardar como pendiente',
+                style: TextStyle(color: AppColors.buttonBrown3),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                final User? user = FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  _guardarPendiente(user.uid);
+                }
+              },
+            ),
+            TextButton(
+              child: const Text(
+                'Enviar para revisión',
+                style: TextStyle(color: AppColors.buttonBlue2),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _enviarRevision();
+              },
+            ),
+            TextButton(
+              child: const Text(
+                'Cancelar',
+                style: TextStyle(color: AppColors.textPaleGreen),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _enviarRevision() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
+    try {
+      setState(() => _isProcessing = true);
 
-    // Subir imagen a Storage
-    final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
-    await ref.putFile(_image!);
-    final imageUrl = await ref.getDownloadURL();
+      final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
 
-    // Crear documento en Firestore
-    await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
-      'userId': user.uid,
-      'imageUrl': imageUrl,
-      'uploadedAt': FieldValue.serverTimestamp(),
-      'status': 'Pending'
-    });
+      final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
+      await ref.putFile(_image!);
+      final imageUrl = await ref.getDownloadURL();
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Gracias por su apoyo.'),
-          backgroundColor: AppColors.buttonGreen2,
-        ),
-      );
+      await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
+        'userId': user.uid,
+        'imageUrl': imageUrl,
+        'uploadedAt': FieldValue.serverTimestamp(),
+        'status': 'Pending'
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto enviada para revisión. Gracias por su apoyo.'),
+            backgroundColor: AppColors.buttonGreen2,
+          ),
+        );
+        
+        setState(() {
+          _image = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al enviar: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
@@ -213,7 +323,9 @@ class _CapturaFotoState extends State<CapturaFoto> {
           child: SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                minHeight: MediaQuery.of(context).size.height - MediaQuery.of(context).padding.top - MediaQuery.of(context).padding.bottom, // Altura de la pantalla menos el padding del SafeArea
+                minHeight: MediaQuery.of(context).size.height - 
+                          MediaQuery.of(context).padding.top - 
+                          MediaQuery.of(context).padding.bottom,
               ),
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -221,7 +333,6 @@ class _CapturaFotoState extends State<CapturaFoto> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // Encabezado
                     Row(
                       children: [
                         IconButton(
@@ -229,21 +340,45 @@ class _CapturaFotoState extends State<CapturaFoto> {
                           color: AppColors.white,
                           onPressed: () => Navigator.pop(context),
                         ),
-                        const Expanded(
-                          child: Text(
-                            'Nueva Fotografía',
-                            style: TextStyle(
-                              color: AppColors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
+                        Expanded(
+                          child: Column(
+                            children: [
+                              const Text(
+                                'Nueva Fotografía',
+                                style: TextStyle(
+                                  color: AppColors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              Container(
+                                margin: const EdgeInsets.only(top: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  _hasInternet ? 'En línea' : 'Sin conexión',
+                                  style: const TextStyle(
+                                    color: AppColors.textBlack,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          color: AppColors.white,
+                          onPressed: _checkInternetConnection,
                         ),
                       ],
                     ),
                     const SizedBox(height: 20),
-                    // Vista previa de la imagen o espacio vacío
                     Container(
                       height: 440,
                       decoration: BoxDecoration(
@@ -267,17 +402,55 @@ class _CapturaFotoState extends State<CapturaFoto> {
                             )
                           : ClipRRect(
                               borderRadius: BorderRadius.circular(18),
-                              child: Image.file(_image!, fit: BoxFit.cover, width: double.infinity, height: 440),
+                              child: Image.file(
+                                _image!, 
+                                fit: BoxFit.cover, 
+                                width: double.infinity, 
+                                height: 440,
+                              ),
                             ),
                     ),
                     const SizedBox(height: 20),
-                    // Requisitos de calidad
-                    Visibility(
-                      visible: _image == null,
-                      //maintainSize: true,
-                      maintainAnimation: true,
-                      maintainState: true,
-                      child: Card(
+                    if (!_hasInternet && _image == null) ...[
+                      Card(
+                        color: AppColors.backgroundCard,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 4,
+                        child: const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.info_outline, color: AppColors.warning, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Sin conexión',
+                                    style: TextStyle(
+                                      color: AppColors.warning,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Las fotos se guardarán como pendientes y se clasificarán automáticamente cuando recuperes la conexión.',
+                                style: TextStyle(
+                                  color: AppColors.textWhite,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ] else if (_image == null) ...[
+                      Card(
                         color: AppColors.backgroundCard,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
@@ -322,15 +495,10 @@ class _CapturaFotoState extends State<CapturaFoto> {
                           ),
                         ),
                       ),
-                    ),
+                    ],
                     const SizedBox(height: 30),
-                    // Botón para ir a la vista de datos
-                    Visibility(
-                      visible: _image != null,
-                      //maintainSize: true,
-                      maintainAnimation: true,
-                      maintainState: true,
-                      child: ElevatedButton.icon(
+                    if (_image != null) ...[
+                      ElevatedButton.icon(
                         icon: _isProcessing
                             ? const SizedBox(
                                 width: 22,
@@ -340,9 +508,14 @@ class _CapturaFotoState extends State<CapturaFoto> {
                                   strokeWidth: 2.5,
                                 ),
                               )
-                            : const Icon(Icons.arrow_forward, color: AppColors.textWhite),
+                            : Icon(
+                                _hasInternet ? Icons.psychology : Icons.save,
+                                color: AppColors.textWhite,
+                              ),
                         label: Text(
-                          _isProcessing ? 'Procesando...' : 'Analizar',
+                          _isProcessing 
+                              ? (_hasInternet ? 'Analizando...' : 'Guardando...')
+                              : (_hasInternet ? 'Analizar' : 'Guardar como pendiente'),
                           style: const TextStyle(
                             color: AppColors.textWhite,
                             fontWeight: FontWeight.bold,
@@ -350,28 +523,21 @@ class _CapturaFotoState extends State<CapturaFoto> {
                           ),
                         ),
                         style: ButtonStyle(
-                          backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                            (states) {
-                              if (states.contains(MaterialState.pressed) || states.contains(MaterialState.hovered)) {
-                                return AppColors.buttonGreen2.withOpacity(0.18);
-                              }
-                              return AppColors.buttonBlue2;
-                            },
+                          backgroundColor: WidgetStateProperty.all(
+                            _hasInternet ? AppColors.buttonBlue2 : AppColors.buttonBrown3,
                           ),
-                          shape: MaterialStateProperty.all<RoundedRectangleBorder>(
+                          shape: WidgetStateProperty.all<RoundedRectangleBorder>(
                             RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
                           ),
-                          minimumSize: MaterialStateProperty.all(const Size(0, 48)),
-                          elevation: MaterialStateProperty.all(_isProcessing ? 0 : 4),
-                          shadowColor: MaterialStateProperty.all(AppColors.buttonBlue2),
+                          minimumSize: WidgetStateProperty.all(const Size(0, 48)),
+                          elevation: WidgetStateProperty.all(_isProcessing ? 0 : 4),
                         ),
                         onPressed: _isProcessing ? null : _analizarFoto,
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    // Botones de captura y galería
+                      const SizedBox(height: 20),
+                    ],
                     Row(
                       children: [
                         Expanded(

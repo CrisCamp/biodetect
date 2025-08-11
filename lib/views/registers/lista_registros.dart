@@ -1,9 +1,8 @@
-import 'dart:io';
-import 'package:biodetect/services/sync_service.dart';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/detalle_registro.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class ListaRegistros extends StatefulWidget {
@@ -42,9 +41,17 @@ class _ListaRegistrosState extends State<ListaRegistros> {
     try {
       final userId = FirebaseAuth.instance.currentUser?.uid;
       if (userId != null) {
-        // Obtener registros combinados actualizados
-        final combinedPhotos = await SyncService.getCombinedPhotos(userId);
-        final nuevosRegistros = combinedPhotos[widget.taxonOrder] ?? [];
+        // Obtener registros actualizados desde cache/servidor
+        final query = await FirebaseFirestore.instance
+            .collection('insect_photos')
+            .where('userId', isEqualTo: userId)
+            .where('taxonOrder', isEqualTo: widget.taxonOrder)
+            .get(const GetOptions(source: Source.serverAndCache));
+
+        final nuevosRegistros = query.docs.map((doc) => {
+          ...doc.data(),
+          'photoId': doc.id,
+        }).toList();
         
         setState(() {
           _registrosOriginales = nuevosRegistros;
@@ -71,9 +78,9 @@ class _ListaRegistrosState extends State<ListaRegistros> {
     // Filtrado por búsqueda
     if (_searchText.isNotEmpty) {
       lista = lista.where((registro) {
-        final habitat = (registro['habitat'] ?? '').toString().toLowerCase();
-        final detalles = (registro['details'] ?? '').toString().toLowerCase();
-        final notas = (registro['notes'] ?? '').toString().toLowerCase();
+        final habitat = (registro['habitat'] ?? 'Sin hábitat').toString().toLowerCase();
+        final detalles = (registro['details'] ?? 'Sin detalles').toString().toLowerCase();
+        final notas = (registro['notes'] ?? 'Sin notas').toString().toLowerCase();
         
         // Para registros offline, la fecha está en 'createdAt' como timestamp
         String fecha = '';
@@ -102,8 +109,8 @@ class _ListaRegistrosState extends State<ListaRegistros> {
         break;
       case 'habitat':
         lista.sort((a, b) {
-          final aHabitat = (a['habitat'] ?? '').toString().toLowerCase();
-          final bHabitat = (b['habitat'] ?? '').toString().toLowerCase();
+          final aHabitat = (a['habitat'] ?? 'Sin hábitat').toString().toLowerCase();
+          final bHabitat = (b['habitat'] ?? 'Sin hábitat').toString().toLowerCase();
           return _habitatAscendente
               ? aHabitat.compareTo(bHabitat)
               : bHabitat.compareTo(aHabitat);
@@ -156,8 +163,8 @@ class _ListaRegistrosState extends State<ListaRegistros> {
   }
 
   Widget _buildRegistroTile(Map<String, dynamic> registro) {
-    final isOnline = registro['isOnline'] ?? false;
-    final imageSource = isOnline ? registro['imageUrl'] : registro['localImagePath'];
+    final isOnline = registro['isOnline'] ?? true; // Asumir que es online por defecto
+    final imageSource = registro['imageUrl'] ?? '';
 
     return Card(
       color: AppColors.backgroundCard,
@@ -190,12 +197,12 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                 child: SizedBox(
                   width: 60,
                   height: 60,
-                  child: isOnline
+                  child: imageSource.isNotEmpty
                       ? CachedNetworkImage(
                           imageUrl: imageSource,
                           fit: BoxFit.cover,
                           placeholder: (context, url) => Container(
-                            color: AppColors.paleGreen.withOpacity(0.3),
+                            color: AppColors.paleGreen.withValues(alpha: 0.3),
                             child: const Center(
                               child: CircularProgressIndicator(
                                 color: AppColors.buttonGreen2,
@@ -204,7 +211,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                             ),
                           ),
                           errorWidget: (context, url, error) => Container(
-                            color: AppColors.paleGreen.withOpacity(0.3),
+                            color: AppColors.paleGreen.withValues(alpha: 0.3),
                             child: const Icon(
                               Icons.error_outline,
                               color: AppColors.warning,
@@ -212,19 +219,14 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                             ),
                           ),
                         )
-                      : File(imageSource).existsSync()
-                          ? Image.file(
-                              File(imageSource),
-                              fit: BoxFit.cover,
-                            )
-                          : Container(
-                              color: AppColors.paleGreen.withOpacity(0.3),
-                              child: const Icon(
-                                Icons.image_not_supported,
-                                color: AppColors.textPaleGreen,
-                                size: 20,
-                              ),
-                            ),
+                      : Container(
+                          color: AppColors.paleGreen.withValues(alpha: 0.3),
+                          child: const Icon(
+                            Icons.image_not_supported,
+                            color: AppColors.textPaleGreen,
+                            size: 20,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -237,23 +239,25 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                       children: [
                         Expanded(
                           child: Text(
-                            registro['class'] ?? 'Clase no especificada',
+                            registro['taxonOrder'] ?? 'Orden no especificado',
                             style: const TextStyle(
                               color: AppColors.textWhite,
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         // Indicador de estado
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: isOnline ? AppColors.buttonGreen2 : AppColors.buttonBrown3,
-                            borderRadius: BorderRadius.circular(10),
+                            color: isOnline ? AppColors.buttonGreen2 : AppColors.warning,
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            isOnline ? 'Sync' : 'Local',
+                            isOnline ? 'Online' : 'Offline',
                             style: const TextStyle(
                               color: AppColors.textBlack,
                               fontSize: 10,
@@ -366,6 +370,8 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                         Expanded(
                           child: DropdownButtonFormField<String>(
                             value: _selectedFiltro,
+                            dropdownColor: AppColors.backgroundCard,
+                            style: const TextStyle(color: AppColors.textWhite),
                             decoration: InputDecoration(
                               filled: true,
                               fillColor: AppColors.backgroundCard,
@@ -373,10 +379,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                                 borderRadius: BorderRadius.circular(8),
                                 borderSide: BorderSide.none,
                               ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                             ),
-                            dropdownColor: AppColors.backgroundCard,
-                            style: const TextStyle(color: AppColors.textWhite, fontSize: 14),
                             items: const [
                               DropdownMenuItem(value: 'recientes', child: Text('Más recientes')),
                               DropdownMenuItem(value: 'viejos', child: Text('Más antiguos')),
@@ -384,7 +387,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                             ],
                             onChanged: (value) {
                               setState(() {
-                                _selectedFiltro = value!;
+                                _selectedFiltro = value ?? 'recientes';
                               });
                               _aplicarFiltro();
                             },
@@ -395,7 +398,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                           IconButton(
                             icon: Icon(
                               _habitatAscendente ? Icons.arrow_upward : Icons.arrow_downward,
-                              color: AppColors.buttonGreen2,
+                              color: AppColors.white,
                             ),
                             onPressed: () {
                               setState(() {
@@ -426,7 +429,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                               children: [
                                 Icon(
                                   Icons.search_off,
-                                  size: 60,
+                                  size: 80,
                                   color: AppColors.textPaleGreen,
                                 ),
                                 SizedBox(height: 16),
@@ -440,9 +443,9 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                                 ),
                                 SizedBox(height: 8),
                                 Text(
-                                  'Intenta ajustar los filtros de búsqueda',
+                                  'Intenta con otros términos de búsqueda',
                                   style: TextStyle(
-                                    color: AppColors.textWhite,
+                                    color: AppColors.textPaleGreen,
                                     fontSize: 14,
                                   ),
                                 ),
