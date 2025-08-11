@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/lista_registros.dart';
-import 'package:biodetect/services/sync_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -22,22 +22,18 @@ class _AlbumFotosState extends State<AlbumFotos> {
   void initState() {
     super.initState();
     _loadPhotos();
-    _checkInternetAndSync();
+    _checkInternetConnection();
   }
 
-  Future<void> _checkInternetAndSync() async {
-    final hasInternet = await SyncService.hasInternetConnection();
-    setState(() {
-      _hasInternet = hasInternet;
-    });
-
-    if (hasInternet) {
-      // Intentar sincronizar fotos pendientes en segundo plano
-      SyncService.syncPendingPhotos().then((_) {
-        // Recargar después de sincronizar
-        _loadPhotos();
-      }).catchError((e) {
-        print('Error durante sincronización: $e');
+  Future<void> _checkInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup('google.com');
+      setState(() {
+        _hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      });
+    } catch (_) {
+      setState(() {
+        _hasInternet = false;
       });
     }
   }
@@ -49,11 +45,34 @@ class _AlbumFotosState extends State<AlbumFotos> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // Obtener fotos combinadas (online + offline)
-      final combinedPhotos = await SyncService.getCombinedPhotos(user.uid);
+      // Usar cache de Firestore (igual que ProfileScreen)
+      final query = await FirebaseFirestore.instance
+          .collection('insect_photos')
+          .where('userId', isEqualTo: user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
+
+      // Agrupar por taxonOrder
+      final Map<String, List<Map<String, dynamic>>> photoGroups = {};
+      for (final doc in query.docs) {
+        final data = doc.data();
+        final taxonOrder = data['taxonOrder'] as String? ?? 'Sin clasificar'; // Proteger contra null
+        
+        photoGroups.putIfAbsent(taxonOrder, () => []);
+        photoGroups[taxonOrder]!.add({
+          ...data,
+          'photoId': doc.id,
+          // Asegurar que todos los campos necesarios existan
+          'imageUrl': data['imageUrl'] ?? '',
+          'taxonOrder': taxonOrder,
+          'habitat': data['habitat'] ?? 'No especificado',
+          'details': data['details'] ?? 'Sin detalles',
+          'notes': data['notes'] ?? 'Sin notas',
+          'class': data['class'] ?? 'Sin clasificar',
+        });
+      }
       
       setState(() {
-        _photoGroups = combinedPhotos;
+        _photoGroups = photoGroups;
         _isLoading = false;
       });
     } catch (e) {
@@ -68,9 +87,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
 
   Widget _buildPhotoTile(String taxonOrder, List<Map<String, dynamic>> photos) {
     final firstPhoto = photos.first;
-    final isOnline = firstPhoto['isOnline'] ?? false;
-    final imageSource = isOnline ? firstPhoto['imageUrl'] : firstPhoto['localImagePath'];
-    final offlineCount = photos.where((p) => !(p['isOnline'] ?? false)).length;
+    final imageSource = firstPhoto['imageUrl'] ?? '';
 
     return Card(
       color: AppColors.backgroundCard,
@@ -90,7 +107,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
                 registros: photos,
               ),
             ),
-          ).then((_) => _loadPhotos()); // Recargar al volver
+          ).then((_) => _loadPhotos());
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -102,12 +119,12 @@ class _AlbumFotosState extends State<AlbumFotos> {
                 child: SizedBox(
                   width: 80,
                   height: 80,
-                  child: isOnline
+                  child: imageSource.isNotEmpty
                       ? CachedNetworkImage(
                           imageUrl: imageSource,
                           fit: BoxFit.cover,
                           placeholder: (context, url) => Container(
-                            color: AppColors.paleGreen.withOpacity(0.3),
+                            color: AppColors.paleGreen.withValues(alpha: 0.3),
                             child: const Center(
                               child: CircularProgressIndicator(
                                 color: AppColors.buttonGreen2,
@@ -116,7 +133,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
                             ),
                           ),
                           errorWidget: (context, url, error) => Container(
-                            color: AppColors.paleGreen.withOpacity(0.3),
+                            color: AppColors.paleGreen.withValues(alpha: 0.3),
                             child: const Icon(
                               Icons.error_outline,
                               color: AppColors.warning,
@@ -124,19 +141,14 @@ class _AlbumFotosState extends State<AlbumFotos> {
                             ),
                           ),
                         )
-                      : File(imageSource).existsSync()
-                          ? Image.file(
-                              File(imageSource),
-                              fit: BoxFit.cover,
-                            )
-                          : Container(
-                              color: AppColors.paleGreen.withOpacity(0.3),
-                              child: const Icon(
-                                Icons.image_not_supported,
-                                color: AppColors.textPaleGreen,
-                                size: 30,
-                              ),
-                            ),
+                      : Container(
+                          color: AppColors.paleGreen.withValues(alpha: 0.3),
+                          child: const Icon(
+                            Icons.image_not_supported,
+                            color: AppColors.textPaleGreen,
+                            size: 30,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(width: 16),
@@ -161,40 +173,22 @@ class _AlbumFotosState extends State<AlbumFotos> {
                         fontSize: 14,
                       ),
                     ),
-                    if (offlineCount > 0) ...[
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.buttonBrown3,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '$offlineCount sin sincronizar',
-                          style: const TextStyle(
-                            color: AppColors.textBlack,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
-              // Indicador de estado
+              // Indicador de conexión
               Column(
                 children: [
                   Icon(
-                    isOnline ? Icons.cloud_done : Icons.smartphone,
-                    color: isOnline ? AppColors.buttonGreen2 : AppColors.buttonBrown3,
+                    _hasInternet ? Icons.cloud_done : Icons.cloud_off,
+                    color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
                     size: 24,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    isOnline ? 'Online' : 'Local',
+                    _hasInternet ? 'Online' : 'Cache',
                     style: TextStyle(
-                      color: isOnline ? AppColors.buttonGreen2 : AppColors.buttonBrown3,
+                      color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),
@@ -255,7 +249,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              _hasInternet ? 'Conectado' : 'Sin conexión',
+                              _hasInternet ? 'Conectado' : 'Modo Cache',
                               style: const TextStyle(
                                 color: AppColors.textBlack,
                                 fontSize: 12,
@@ -266,11 +260,13 @@ class _AlbumFotosState extends State<AlbumFotos> {
                         ],
                       ),
                     ),
-                    // Botón de sincronización manual
                     IconButton(
-                      icon: const Icon(Icons.sync),
+                      icon: const Icon(Icons.refresh),
                       color: AppColors.white,
-                      onPressed: _isLoading ? null : _checkInternetAndSync,
+                      onPressed: _isLoading ? null : () {
+                        _checkInternetConnection();
+                        _loadPhotos();
+                      },
                     ),
                   ],
                 ),
@@ -307,7 +303,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
                                   'Captura tu primera fotografía para\ncomenzar tu colección',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: AppColors.textWhite,
+                                    color: AppColors.textPaleGreen,
                                     fontSize: 14,
                                   ),
                                 ),
@@ -316,14 +312,12 @@ class _AlbumFotosState extends State<AlbumFotos> {
                           )
                         : RefreshIndicator(
                             onRefresh: _loadPhotos,
-                            color: AppColors.buttonGreen2,
                             child: ListView.builder(
-                              padding: const EdgeInsets.only(bottom: 16),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
                               itemCount: _photoGroups.length,
                               itemBuilder: (context, index) {
-                                final taxonOrder = _photoGroups.keys.elementAt(index);
-                                final photos = _photoGroups[taxonOrder]!;
-                                return _buildPhotoTile(taxonOrder, photos);
+                                final entry = _photoGroups.entries.toList()[index];
+                                return _buildPhotoTile(entry.key, entry.value);
                               },
                             ),
                           ),
