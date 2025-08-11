@@ -155,6 +155,8 @@ class _EditarPerfilState extends State<EditarPerfil> {
       await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
         'fullname': nuevoNombre,
       });
+      await user.updateDisplayName(nuevoNombre);
+      user.reload(); // Actualiza el usuario en Firebase Auth
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
