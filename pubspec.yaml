@@ -35,6 +35,7 @@ dependencies:
   google_sign_in: ^6.1.5
 
   # Maps - Mapbox
+  image: ^4.0.17
   mapbox_maps_flutter: ^2.0.0
 
   # Conexión a servidor de la IA
@@ -56,3 +57,4 @@ flutter:
   assets:
     - assets/ic_logo_biodetect.png
     - assets/ic_google.png
+    - assets/map_markers/

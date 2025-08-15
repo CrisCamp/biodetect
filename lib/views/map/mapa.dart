@@ -6,6 +6,9 @@ import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:typed_data';
+import 'package:flutter/services.dart' show rootBundle, PlatformException;
+import 'package:image/image.dart' as img;
 
 class MapaIterativoScreen extends StatefulWidget {
   const MapaIterativoScreen({super.key});
@@ -23,6 +26,8 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
   bool _isLoading = true;
   bool _hasLocationPermission = false;
   String? _mapError;
+
+  final Map<String, String> _loadedMarkerImageIds = {};
 
   @override
   void initState() {
@@ -150,49 +155,149 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
     }
   }
 
+  Future<Uint8List?> _loadAssetBytes(String assetPath) async {
+    try {
+      final ByteData byteData = await rootBundle.load(assetPath);
+      return byteData.buffer.asUint8List();
+    } catch (e) {
+      print('Error cargando asset $assetPath: $e');
+      return null;
+    }
+  }
+
   Future<void> _addPhotoMarkers() async {
-    if (pointAnnotationManager == null) return;
+    if (pointAnnotationManager == null || mapboxMap == null || !_userPhotos.isNotEmpty) {
+      print("No se pueden agregar marcadores: pointAnnotationManager, mapboxMap o _userPhotos no están listos.");
+      return;
+    }
 
     try {
-      // Limpiar marcadores existentes
       if (_createdAnnotations.isNotEmpty) {
         await pointAnnotationManager!.deleteAll();
         _createdAnnotations.clear();
       }
 
-      List<mapbox.PointAnnotationOptions> annotations = [];
-      
+      List<mapbox.PointAnnotationOptions> annotationOptionsList = [];
+
       for (int i = 0; i < _userPhotos.length; i++) {
         final photo = _userPhotos[i];
+        String? taxonOrder = photo['taxonOrder']?.toString().toLowerCase().replaceAll(' ', '_');
+        String markerIconId;
 
-        final annotation = mapbox.PointAnnotationOptions(
-          geometry: mapbox.Point(
-            coordinates: mapbox.Position.named(
-              lng: photo['lon'],
-              lat: photo['lat'],
-            ),
-          ),
-          textField: photo['taxonOrder'] ?? 'Registro',
-          textSize: 12.0,
-          textColor: Colors.white.toARGB32(),
-          textHaloColor: Colors.black.toARGB32(),
-          textHaloWidth: 2.0,
-          iconSize: 1.5,
-          iconColor: AppColors.buttonGreen2.toARGB32(),
-        );
-        
-        annotations.add(annotation);
+        if (taxonOrder != null && taxonOrder.isNotEmpty) {
+          final String assetPath = 'assets/map_markers/$taxonOrder.png';
+
+          if (_loadedMarkerImageIds.containsKey(assetPath)) {
+            markerIconId = _loadedMarkerImageIds[assetPath]!;
+            print("Usando imagen de marcador cacheada para $taxonOrder con ID: $markerIconId");
+          } else {
+            Uint8List? imageBytes = await _loadAssetBytes(assetPath);
+            if (imageBytes != null) {
+              // ***** DECODIFICAR IMAGEN PARA OBTENER DIMENSIONES *****
+              img.Image? decodedImage = img.decodeImage(imageBytes);
+              if (decodedImage == null) {
+                print("Error: No se pudo decodificar la imagen desde los bytes para $assetPath.");
+                // Fallback si la decodificación falla
+                annotationOptionsList.add(
+                    mapbox.PointAnnotationOptions(
+                      geometry: mapbox.Point(coordinates: mapbox.Position.named(lng: photo['lon'], lat: photo['lat'])),
+                      iconColor: Colors.red.toARGB32(), // Color de error
+                      iconSize: 1.0,
+                      textField: "Error img",
+                    )
+                );
+                continue; // Pasa a la siguiente foto
+              }
+              int imageWidth = decodedImage.width;
+              int imageHeight = decodedImage.height;
+              // ***** FIN DE DECODIFICACIÓN *****
+
+              if (imageWidth == 0 || imageHeight == 0) {
+                print("Error: La imagen decodificada $assetPath tiene dimensiones cero.");
+                // Fallback si las dimensiones son cero
+                annotationOptionsList.add(
+                    mapbox.PointAnnotationOptions(
+                      geometry: mapbox.Point(coordinates: mapbox.Position.named(lng: photo['lon'], lat: photo['lat'])),
+                      iconColor: Colors.orange.toARGB32(), // Color de advertencia
+                      iconSize: 1.0,
+                      textField: "Dim Zero",
+                    )
+                );
+                continue; // Pasa a la siguiente foto
+              }
+
+
+              final String styleImageId = "marker_icon_$taxonOrder";
+
+              await mapboxMap!.style.addStyleImage(
+                  styleImageId,
+                  1.0, // scaleFactor
+                  mapbox.MbxImage(width: imageWidth, height: imageHeight, data: imageBytes), // Usa dimensiones decodificadas
+                  false, // sdf
+                  [],
+                  [],
+                  null
+              );
+
+              _loadedMarkerImageIds[assetPath] = styleImageId;
+              markerIconId = styleImageId;
+              print("Imagen $assetPath (w:$imageWidth, h:$imageHeight) cargada y añadida al estilo con ID: $markerIconId");
+            } else {
+              print("Fallback: No se pudo cargar la imagen $assetPath. Usando marcador por defecto.");
+              annotationOptionsList.add(
+                  mapbox.PointAnnotationOptions(
+                    geometry: mapbox.Point(coordinates: mapbox.Position.named(lng: photo['lon'], lat: photo['lat'])),
+                    iconColor: AppColors.warning.toARGB32(),
+                    iconSize: 1.0,
+                  )
+              );
+              continue;
+            }
+          }
+
+          annotationOptionsList.add(
+              mapbox.PointAnnotationOptions(
+                geometry: mapbox.Point(coordinates: mapbox.Position.named(lng: photo['lon'], lat: photo['lat'])),
+                iconImage: markerIconId,
+                iconSize: 0.4,
+              )
+          );
+
+        } else {
+          print("No hay taxonOrder para photoId: ${photo['photoId']}. Usando marcador de texto por defecto.");
+          annotationOptionsList.add(
+              mapbox.PointAnnotationOptions(
+                geometry: mapbox.Point(coordinates: mapbox.Position.named(lng: photo['lon'], lat: photo['lat'])),
+                textField: 'Registro',
+                textSize: 10.0,
+                textColor: Colors.black.toARGB32(),
+                iconColor: AppColors.buttonGreen2.toARGB32(),
+                iconSize: 1.0,
+              )
+          );
+        }
       }
-      
-      if (annotations.isNotEmpty) {
-        final createdAnnotations = await pointAnnotationManager!.createMulti(annotations);
-        _createdAnnotations = createdAnnotations.where((annotation) => annotation != null)
+
+      if (annotationOptionsList.isNotEmpty) {
+        final createdAnnotationsResult = await pointAnnotationManager!.createMulti(annotationOptionsList);
+        _createdAnnotations = createdAnnotationsResult
+            .where((annotation) => annotation != null)
             .map((annotation) => annotation!)
             .toList();
-        print('Marcadores agregados: ${_createdAnnotations.length}');
+        print('Marcadores con imágenes de assets agregados: ${_createdAnnotations.length}');
+        if (_createdAnnotations.isEmpty && annotationOptionsList.isNotEmpty) {
+          print("ALERTA: Se crearon opciones de anotación pero no se generaron anotaciones en el mapa.");
+        }
+      } else if (_userPhotos.isNotEmpty) {
+        print("ALERTA: Había fotos de usuario pero no se generaron opciones de anotación.");
       }
+
+
     } catch (e) {
-      print('Error agregando marcadores: $e');
+      print('Error agregando marcadores con imágenes de assets: $e');
+      if (e is PlatformException) {
+        print('Error de plataforma específico: Código: ${e.code}, Mensaje: ${e.message}, Detalles: ${e.details}');
+      }
     }
   }
 
