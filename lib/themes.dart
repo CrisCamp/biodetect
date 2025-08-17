@@ -39,6 +39,7 @@ class AppColors {
 
   // ========== ADVERTENCIAS ==========
   static const Color warning = Color(0xFFFF6B6B);
+  static const Color warningDark = Color(0xFFFF0000);
   static const Color caution = Color(0xFFFFD166);
 
   // ========== MODO OSCURO ==========

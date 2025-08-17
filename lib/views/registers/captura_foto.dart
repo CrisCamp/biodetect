@@ -28,7 +28,6 @@ class _CapturaFotoState extends State<CapturaFoto> {
   void initState() {
     super.initState();
     _checkInternetConnection();
-    _getCurrentLocation();
   }
 
   Future<void> _checkInternetConnection() async {
@@ -75,6 +74,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
       setState(() {
         _image = File(pickedFile.path);
       });
+      _getCurrentLocation();
     }
   }
 
@@ -85,6 +85,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
       setState(() {
         _image = File(pickedFile.path);
       });
+      _getCurrentLocation();
     }
   }
 
@@ -113,25 +114,26 @@ class _CapturaFotoState extends State<CapturaFoto> {
     await _checkInternetConnection();
 
     if (!_hasInternet) {
-      await _guardarPendiente(user.uid);
+      await _guardarPendiente();
       return;
     }
 
     try {
       final Map<String, dynamic> response = await AIService.analyzeImage(_image!);
 
-      final String ordenTaxonomico = response['predicted_class'];
-      final List<String> taxonomia = ordenTaxonomico.split('-');
+      final String clasificacion = response['predicted_class'];
       final double confianza = response['confidence'];
+
+      final List<String> taxonomia = clasificacion.split('-');
+      final String claseArtropodo = taxonomia[0];
+      final String ordenTaxonomico = taxonomia[1];
 
       if (mounted) {
         if (confianza >= 0.75) {
-          final String claseArtropodo = taxonomia[0];
-          final String ordenTaxonomicoFinal = taxonomia[1];
           
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Clase: $claseArtropodo. Orden: $ordenTaxonomicoFinal.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)'),
+              content: Text('Clase: $claseArtropodo. Orden: $ordenTaxonomico.\nConfianza: (${(confianza * 100).toStringAsFixed(2)}%)'),
               backgroundColor: AppColors.buttonGreen2,
             ),
           );
@@ -145,7 +147,8 @@ class _CapturaFotoState extends State<CapturaFoto> {
                 builder: (context) => RegDatos(
                   imageFile: _image!,
                   claseArtropodo: claseArtropodo,
-                  ordenTaxonomico: ordenTaxonomicoFinal,
+                  ordenTaxonomico: ordenTaxonomico,
+                  coordenadas: _currentPosition != null ? {'x': _currentPosition!.latitude, 'y': _currentPosition!.longitude} : null,
                 ),
               ),
             );
@@ -157,7 +160,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
             }
           }
         } else {
-          await _mostrarOpcionesBajaConfianza();
+          await _mostrarOpcionesBajaConfianza(claseArtropodo, ordenTaxonomico, confianza);
         }
       }
     } catch (e) {
@@ -174,8 +177,14 @@ class _CapturaFotoState extends State<CapturaFoto> {
     if (mounted) setState(() => _isProcessing = false);
   }
 
-  Future<void> _guardarPendiente(String userId) async {
+  Future<void> _guardarPendiente() async {
     try {
+      final User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (mounted) setState(() => _isProcessing = false);
+        return;
+      }
+      final String userId = user.uid;
       await PendingPhotosService.savePendingPhoto(
         userId: userId,
         imageFile: _image!,
@@ -186,8 +195,8 @@ class _CapturaFotoState extends State<CapturaFoto> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Foto guardada como pendiente. Se clasificará cuando tengas conexión.'),
-            backgroundColor: AppColors.buttonBrown3,
+            content: Text('Foto guardada como pendiente. Podrás analizarla más tarde.'),
+            backgroundColor: AppColors.buttonGreen2,
             duration: Duration(seconds: 3),
           ),
         );
@@ -210,41 +219,75 @@ class _CapturaFotoState extends State<CapturaFoto> {
     if (mounted) setState(() => _isProcessing = false);
   }
 
-  Future<void> _mostrarOpcionesBajaConfianza() async {
-    if (!mounted) return;
-    
+  Future<void> _mostrarOpcionesBajaConfianza(
+    String claseArtropodo,
+    String ordenTaxonomico,
+    double confianza
+  ) async {
     return showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          backgroundColor: AppColors.backgroundCard,
+          backgroundColor: AppColors.textPaleGreen,
           title: const Text(
             'Confianza Insuficiente',
-            style: TextStyle(color: AppColors.textWhite),
+            style: TextStyle(color: AppColors.black),
           ),
-          content: const Text(
-            'No se alcanzó el nivel de confianza adecuado para la identificación automática.',
-            style: TextStyle(color: AppColors.textWhite),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'El nivel de confianza es insuficiente para una clasificación automática.',
+                style: TextStyle(color: AppColors.textGraphite),
+              ),
+              const SizedBox(height: 5),
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(color: AppColors.textGraphite),
+                  children: [
+                    const TextSpan(
+                      text: 'Clase: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: claseArtropodo,
+                    ),
+                    const TextSpan(
+                      text: '\nOrden: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: ordenTaxonomico,
+                    ),
+                    const TextSpan(
+                      text: '\nConfianza: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: '${(confianza * 100).toStringAsFixed(2)}%',
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           actions: <Widget>[
             TextButton(
               child: const Text(
-                'Guardar como pendiente',
-                style: TextStyle(color: AppColors.buttonBrown3),
+                'Ingresar manualmente',
+                style: TextStyle(color: AppColors.blueDark),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
-                final User? user = FirebaseAuth.instance.currentUser;
-                if (user != null) {
-                  _guardarPendiente(user.uid);
-                }
+                _procederConClasificacion(claseArtropodo, ordenTaxonomico);
               },
             ),
             TextButton(
               child: const Text(
                 'Enviar para revisión',
-                style: TextStyle(color: AppColors.buttonBlue2),
+                style: TextStyle(color: AppColors.darkTeal),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -253,8 +296,21 @@ class _CapturaFotoState extends State<CapturaFoto> {
             ),
             TextButton(
               child: const Text(
+                'Eliminar foto',
+                style: TextStyle(color: AppColors.warningDark),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                setState(() {
+                  _image = null;
+                  _isProcessing = false;
+                });
+              },
+            ),
+            TextButton(
+              child: const Text(
                 'Cancelar',
-                style: TextStyle(color: AppColors.textPaleGreen),
+                style: TextStyle(color: AppColors.black),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -264,6 +320,47 @@ class _CapturaFotoState extends State<CapturaFoto> {
         );
       },
     );
+  }
+
+  Future<void> _procederConClasificacion(String claseArtropodo, String ordenTaxonomico) async {
+    try {
+      if (_image == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Error: No hay imagen para registrar manualmente.')),
+          );
+        }
+        return;
+      }
+
+      final dynamic result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => RegDatos(
+            imageFile: _image!,
+            claseArtropodo: claseArtropodo,
+            ordenTaxonomico: ordenTaxonomico,
+            coordenadas: _currentPosition != null ? {'x': _currentPosition!.latitude, 'y': _currentPosition!.longitude} : null,
+          ),
+        ),
+      );
+
+      if (result == 'saved' && mounted) {
+        setState(() {
+          _image = null;
+          _isProcessing = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _enviarRevision() async {
@@ -283,7 +380,8 @@ class _CapturaFotoState extends State<CapturaFoto> {
         'userId': user.uid,
         'imageUrl': imageUrl,
         'uploadedAt': FieldValue.serverTimestamp(),
-        'status': 'Pending'
+        'status': 'pending',
+        'coords': {'x': _currentPosition?.latitude, 'y': _currentPosition?.longitude}
       });
 
       if (mounted) {
@@ -439,7 +537,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
                               ),
                               SizedBox(height: 8),
                               Text(
-                                'Las fotos se guardarán como pendientes y se clasificarán automáticamente cuando recuperes la conexión.',
+                                'Las fotos se guardarán como pendientes y podrás analizarlas cuando recuperes la conexión.',
                                 style: TextStyle(
                                   color: AppColors.textWhite,
                                   fontSize: 14,
@@ -498,9 +596,32 @@ class _CapturaFotoState extends State<CapturaFoto> {
                     ],
                     const SizedBox(height: 30),
                     if (_image != null) ...[
-                      ElevatedButton.icon(
-                        icon: _isProcessing
-                            ? const SizedBox(
+                      Row(
+                        children: [
+                          // --- NUEVO BOTÓN "GUARDAR COMO PENDIENTE" ---
+                          if (_hasInternet) // Visible solo en caso de tener internet, por si el usuario quiere guardar para más tarde
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.save_as_outlined),
+                                color: AppColors.textWhite,
+                                style: IconButton.styleFrom(
+                                  backgroundColor: AppColors.buttonBrown3,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                ),
+                                tooltip: 'Guardar como pendiente',
+                                onPressed: _isProcessing ? null : _guardarPendiente,
+                              ),
+                            ),
+                          // --- FIN DEL NUEVO BOTÓN ---
+
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: _isProcessing
+                                  ? const SizedBox(
                                 width: 22,
                                 height: 22,
                                 child: CircularProgressIndicator(
@@ -508,33 +629,36 @@ class _CapturaFotoState extends State<CapturaFoto> {
                                   strokeWidth: 2.5,
                                 ),
                               )
-                            : Icon(
-                                _hasInternet ? Icons.psychology : Icons.save,
+                                  : Icon(
+                                _hasInternet ? Icons.psychology : Icons.save, // El icono original
                                 color: AppColors.textWhite,
                               ),
-                        label: Text(
-                          _isProcessing 
-                              ? (_hasInternet ? 'Analizando...' : 'Guardando...')
-                              : (_hasInternet ? 'Analizar' : 'Guardar como pendiente'),
-                          style: const TextStyle(
-                            color: AppColors.textWhite,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        style: ButtonStyle(
-                          backgroundColor: WidgetStateProperty.all(
-                            _hasInternet ? AppColors.buttonBlue2 : AppColors.buttonBrown3,
-                          ),
-                          shape: WidgetStateProperty.all<RoundedRectangleBorder>(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                              label: Text(
+                                _isProcessing
+                                    ? (_hasInternet ? 'Analizando...' : 'Guardando...')
+                                    : (_hasInternet ? 'Analizar' : 'Guardar como pendiente'),
+                                style: const TextStyle(
+                                  color: AppColors.textWhite,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              style: ButtonStyle(
+                                backgroundColor: WidgetStateProperty.all(
+                                  _hasInternet ? AppColors.buttonBlue2 : AppColors.buttonBrown3,
+                                ),
+                                shape: WidgetStateProperty.all<RoundedRectangleBorder>(
+                                  RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                minimumSize: WidgetStateProperty.all(const Size(0, 48)), // Altura consistente
+                                elevation: WidgetStateProperty.all(_isProcessing ? 0 : 4),
+                              ),
+                              onPressed: _isProcessing ? null : _analizarFoto, // Tu función original
                             ),
                           ),
-                          minimumSize: WidgetStateProperty.all(const Size(0, 48)),
-                          elevation: WidgetStateProperty.all(_isProcessing ? 0 : 4),
-                        ),
-                        onPressed: _isProcessing ? null : _analizarFoto,
+                        ],
                       ),
                       const SizedBox(height: 20),
                     ],

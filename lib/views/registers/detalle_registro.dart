@@ -158,17 +158,66 @@ class _DetalleRegistroState extends State<DetalleRegistro> {
     return 'Fecha: No disponible';
   }
 
-  Future<void> _actualizarActividadUsuario(String userId, String taxonOrder) async {
+  Future<void> _actualizarActividadUsuario(String userId, String className, String taxonOrder) async {
     if (!_hasInternet) return;
-    
-    final activityRef = FirebaseFirestore.instance.collection('user_activity').doc(userId);
-    await activityRef.set({
-      'userId': userId,
-      'photosUploaded': FieldValue.increment(-1),
-      'speciesIdentified.total': FieldValue.increment(-1),
-      'speciesIdentified.byTaxon.$taxonOrder': FieldValue.increment(-1),
-      'lastActivity': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+
+    try {
+      final activityRef = FirebaseFirestore.instance.collection('user_activity').doc(userId);
+
+      // Primero obtenemos el documento actual para verificar los conteos
+      final docSnapshot = await activityRef.get();
+
+      if (!docSnapshot.exists) {
+        print('⚠️ User activity document does not exist for user $userId');
+        return;
+      }
+
+      final currentData = docSnapshot.data() as Map<String, dynamic>;
+
+      // Obtener conteos actuales
+      final currentByTaxon = currentData['speciesIdentified']?['byTaxon'] as Map<String, dynamic>?;
+      final currentByClass = currentData['speciesIdentified']?['byClass'] as Map<String, dynamic>?;
+      final currentByClassTaxonomy = currentData['speciesIdentified']?['byClassTaxonomy'] as Map<String, dynamic>?;
+
+      final currentTaxonCount = currentByTaxon?[taxonOrder] ?? 0;
+      final currentClassCount = currentByClass?[className] ?? 0;
+      final currentClassTaxonomyCount = currentByClassTaxonomy?[className] ?? 0;
+
+      // Preparar datos de actualización
+      Map<String, dynamic> updateData = {
+        'photosUploaded': FieldValue.increment(-1),
+        'speciesIdentified.byTaxon.$taxonOrder': FieldValue.increment(-1),
+        'speciesIdentified.byClass.$className': FieldValue.increment(-1),
+        'lastActivity': FieldValue.serverTimestamp(),
+      };
+
+      // Si el conteo del orden llegará a 0, decrementar totalByTaxon
+      if (currentTaxonCount <= 1) {
+        updateData['speciesIdentified.totalByTaxon'] = FieldValue.increment(-1);
+        print('📉 Removing taxon: $taxonOrder (last occurrence)');
+      }
+
+      // Si el conteo de la clase llegará a 0, decrementar totalByClass
+      if (currentClassCount <= 1) {
+        updateData['speciesIdentified.totalByClass'] = FieldValue.increment(-1);
+        print('📉 Removing class: $className (last occurrence)');
+      }
+
+      // Si este orden llegará a 0, decrementar el contador de taxonomías por clase
+      if (currentTaxonCount <= 1) {
+        updateData['speciesIdentified.byClassTaxonomy.$className'] = FieldValue.increment(-1);
+        print('📉 Removing taxonomy $taxonOrder from class $className');
+      }
+
+      await activityRef.update(updateData);
+
+      print('✅ User activity decremented successfully for user $userId');
+      print('📊 Decremented - Order: $taxonOrder, Class: $className');
+
+    } catch (error) {
+      print('❌ Error decrementing user activity: $error');
+      // Aquí puedes manejar el error como prefieras
+    }
   }
 
   Future<void> _eliminarRegistro(BuildContext context) async {
@@ -180,6 +229,7 @@ class _DetalleRegistroState extends State<DetalleRegistro> {
       final photoId = _registro['photoId'];
       final userId = _registro['userId'];
       final taxonOrder = _registro['taxonOrder'] ?? '';
+      final classArtropodo = _registro['class'] ?? '';
 
       if (!_hasInternet) {
         throw Exception('Se requiere conexión a internet para eliminar registros');
@@ -201,7 +251,7 @@ class _DetalleRegistroState extends State<DetalleRegistro> {
 
       // Actualizar actividad del usuario
       if (userId != null && taxonOrder.isNotEmpty) {
-        await _actualizarActividadUsuario(userId, taxonOrder);
+        await _actualizarActividadUsuario(userId, classArtropodo, taxonOrder);
       }
 
       if (mounted) {
