@@ -3,7 +3,9 @@ import 'package:biodetect/themes.dart';
 import 'package:biodetect/services/pending_photos_service.dart';
 import 'package:biodetect/services/ai_service.dart';
 import 'package:biodetect/views/registers/datos.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -18,7 +20,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
   List<Map<String, dynamic>> _pendingPhotos = [];
   bool _isLoading = true;
   bool _hasInternet = false;
-  Set<String> _processingPhotos = {};
+  final Set<String> _processingPhotos = {};
 
   @override
   void initState() {
@@ -59,7 +61,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
     if (!_hasInternet) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Se requiere conexión a internet para clasificar la foto.'),
+          content: Text('Se requiere conexión a internet para analizar la foto.'),
           backgroundColor: AppColors.warning,
         ),
       );
@@ -83,13 +85,14 @@ class _FotosPendientesState extends State<FotosPendientes> {
       
       final String clasificacion = response['predicted_class'];
       final double confianza = response['confidence'];
+
       final List<String> taxonomia = clasificacion.split('-');
+      final claseArtropodo = taxonomia[0];
+      final ordenTaxonomico = taxonomia[1];
 
       if (mounted) {
         if (confianza >= 0.75) {
-          final claseArtropodo = taxonomia[0];
-          final ordenTaxonomico = taxonomia[1];
-          
+
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Clasificación: $claseArtropodo - $ordenTaxonomico\nConfianza: ${(confianza * 100).toStringAsFixed(2)}%'),
@@ -119,14 +122,14 @@ class _FotosPendientesState extends State<FotosPendientes> {
             await _loadPendingPhotos();
           }
         } else {
-          await _mostrarOpcionesBajaConfianza(photo, clasificacion, confianza);
+          await _mostrarOpcionesBajaConfianza(photo, claseArtropodo, ordenTaxonomico, confianza);
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al clasificar: $e'),
+            content: Text('Error al analizar: $e'),
             backgroundColor: AppColors.warning,
           ),
         );
@@ -142,7 +145,8 @@ class _FotosPendientesState extends State<FotosPendientes> {
 
   Future<void> _mostrarOpcionesBajaConfianza(
     Map<String, dynamic> photo, 
-    String clasificacion, 
+    String claseArtropodo,
+    String ordenTaxonomico,
     double confianza
   ) async {
     return showDialog<void>(
@@ -150,45 +154,75 @@ class _FotosPendientesState extends State<FotosPendientes> {
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          backgroundColor: AppColors.backgroundCard,
+          backgroundColor: AppColors.textPaleGreen,
           title: const Text(
             'Confianza Insuficiente',
-            style: TextStyle(color: AppColors.textWhite),
+            style: TextStyle(color: AppColors.black),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Clasificación detectada: $clasificacion',
-                style: const TextStyle(color: AppColors.textWhite),
-              ),
-              Text(
-                'Confianza: ${(confianza * 100).toStringAsFixed(2)}%',
-                style: const TextStyle(color: AppColors.textWhite),
-              ),
-              const SizedBox(height: 8),
               const Text(
                 'El nivel de confianza es insuficiente para una clasificación automática.',
-                style: TextStyle(color: AppColors.textWhite),
+                style: TextStyle(color: AppColors.textGraphite),
+              ),
+              const SizedBox(height: 5),
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(color: AppColors.textGraphite),
+                  children: [
+                    const TextSpan(
+                      text: 'Clase: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: claseArtropodo,
+                    ),
+                    const TextSpan(
+                      text: '\nOrden: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: ordenTaxonomico,
+                    ),
+                    const TextSpan(
+                      text: '\nConfianza: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: '${(confianza * 100).toStringAsFixed(2)}%',
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
           actions: <Widget>[
             TextButton(
               child: const Text(
-                'Aceptar clasificación',
-                style: TextStyle(color: AppColors.buttonGreen2),
+                'Ingresar manualmente',
+                style: TextStyle(color: AppColors.blueDark),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
-                _procederConClasificacion(photo, clasificacion);
+                _procederConClasificacion(photo, claseArtropodo, ordenTaxonomico);
+              },
+            ),
+            TextButton(
+              child: const Text(
+                'Enviar para revisión',
+                style: TextStyle(color: AppColors.darkTeal),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _enviarRevision(photo);
               },
             ),
             TextButton(
               child: const Text(
                 'Eliminar foto',
-                style: TextStyle(color: AppColors.warning),
+                style: TextStyle(color: AppColors.warningDark),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -198,7 +232,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
             TextButton(
               child: const Text(
                 'Cancelar',
-                style: TextStyle(color: AppColors.textPaleGreen),
+                style: TextStyle(color: AppColors.black),
               ),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -210,12 +244,8 @@ class _FotosPendientesState extends State<FotosPendientes> {
     );
   }
 
-  Future<void> _procederConClasificacion(Map<String, dynamic> photo, String clasificacion) async {
+  Future<void> _procederConClasificacion(Map<String, dynamic> photo, String claseArtropodo, String ordenTaxonomico) async {
     try {
-      final List<String> taxonomia = clasificacion.split('-');
-      final claseArtropodo = taxonomia[0];
-      final ordenTaxonomico = taxonomia[1];
-      
       final imageFile = File(photo['localImagePath']);
       
       final result = await Navigator.push(
@@ -241,6 +271,56 @@ class _FotosPendientesState extends State<FotosPendientes> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _enviarRevision(Map<String, dynamic> photo) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final imageFile = File(photo['localImagePath']);
+
+    try {
+      //setState(() => _isProcessing = true);
+
+      final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
+
+      final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
+      await ref.putFile(imageFile);
+      final imageUrl = await ref.getDownloadURL();
+
+      await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
+        'userId': user.uid,
+        'imageUrl': imageUrl,
+        'uploadedAt': FieldValue.serverTimestamp(),
+        'status': 'pending',
+        'coords': {'x': photo['latitude'], 'y': photo['longitude']}
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto enviada para revisión. Gracias por su apoyo.'),
+            backgroundColor: AppColors.buttonGreen2,
+          ),
+        );
+
+        await PendingPhotosService.markAsClassified(photo['id']);
+        await _loadPendingPhotos();
+
+        //setState(() {
+        //  _image = null;
+        //});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al enviar: $e'),
             backgroundColor: AppColors.warning,
           ),
         );
@@ -365,7 +445,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Necesitas conexión a internet para clasificar las fotos.',
+                          'Necesitas conexión a internet para analizar las fotos.',
                           style: TextStyle(
                             color: AppColors.textWhite,
                             fontSize: 12,
@@ -486,7 +566,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
                                       // Botones de acción
                                       Column(
                                         children: [
-                                          // Botón clasificar
+                                          // Botón analizar
                                           ElevatedButton.icon(
                                             icon: isProcessing
                                                 ? const SizedBox(
@@ -499,7 +579,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
                                                   )
                                                 : const Icon(Icons.psychology, size: 16),
                                             label: Text(
-                                              isProcessing ? 'Procesando...' : 'Clasificar',
+                                              isProcessing ? 'Procesando...' : 'Analizar',
                                               style: const TextStyle(fontSize: 11),
                                             ),
                                             style: ElevatedButton.styleFrom(

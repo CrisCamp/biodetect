@@ -151,17 +151,101 @@ class _RegDatosState extends State<RegDatos> {
 
   Future<void> _actualizarActividadUsuario(String userId, {bool isIncrement = true}) async {
     if (!_hasInternet) return;
-    
-    final activityRef = FirebaseFirestore.instance.collection('user_activity').doc(userId);
-    final increment = isIncrement ? 1 : -1;
-    
-    await activityRef.set({
-      'userId': userId,
-      'photosUploaded': FieldValue.increment(increment),
-      'speciesIdentified.total': FieldValue.increment(increment),
-      'speciesIdentified.byTaxon.$taxonOrder': FieldValue.increment(increment),
-      'lastActivity': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+
+    try {
+      final activityRef = FirebaseFirestore.instance.collection('user_activity').doc(userId);
+      final increment = isIncrement ? 1 : -1;
+
+      // Primero obtenemos el documento actual para verificar si son orden/clase nuevos
+      final docSnapshot = await activityRef.get();
+
+      Map<String, dynamic> updateData = {
+        'userId': userId,
+        'photosUploaded': FieldValue.increment(increment),
+        'speciesIdentified.byTaxon.$taxonOrder': FieldValue.increment(increment),
+        'speciesIdentified.byClass.$className': FieldValue.increment(increment),
+        'lastActivity': FieldValue.serverTimestamp(),
+      };
+
+      if (docSnapshot.exists) {
+        // El documento existe, verificar si son orden y clase nuevos
+        final currentData = docSnapshot.data() as Map<String, dynamic>;
+
+        // Verificar si es un orden nuevo
+        final currentByTaxon = currentData['speciesIdentified']?['byTaxon'] as Map<String, dynamic>?;
+        final isNewOrder = currentByTaxon == null || !currentByTaxon.containsKey(taxonOrder);
+
+        // Verificar si es una clase nueva
+        final currentByClass = currentData['speciesIdentified']?['byClass'] as Map<String, dynamic>?;
+        final isNewClass = currentByClass == null || !currentByClass.containsKey(className);
+
+        // Verificar si es un nuevo orden para esta clase específica
+        final isNewOrderForClass = isNewOrder; // Si el orden es nuevo globalmente, también es nuevo para la clase
+
+        // Solo incrementar totales si son orden/clase nuevos
+        if (isNewOrder && isIncrement) {
+          updateData['speciesIdentified.totalByTaxon'] = FieldValue.increment(1);
+        } else if (!isIncrement && !isNewOrder) {
+          // Al decrementar, verificar si queda en 0 para decrementar el total
+          final currentOrderCount = currentByTaxon?[taxonOrder] ?? 0;
+          if (currentOrderCount <= 1) {
+            updateData['speciesIdentified.totalByTaxon'] = FieldValue.increment(-1);
+          }
+        }
+
+        if (isNewClass && isIncrement) {
+          updateData['speciesIdentified.totalByClass'] = FieldValue.increment(1);
+        } else if (!isIncrement && !isNewClass) {
+          // Al decrementar, verificar si queda en 0 para decrementar el total
+          final currentClassCount = currentByClass?[className] ?? 0;
+          if (currentClassCount <= 1) {
+            updateData['speciesIdentified.totalByClass'] = FieldValue.increment(-1);
+          }
+        }
+
+        // Manejar el contador de taxonomías por clase
+        if (isNewOrderForClass && isIncrement) {
+          updateData['speciesIdentified.byClassTaxonomy.$className'] = FieldValue.increment(1);
+          print('🆕 New taxonomy for class $className: $taxonOrder');
+        } else if (!isIncrement && !isNewOrderForClass) {
+          // Al decrementar, verificar si queda en 0 para decrementar el total de taxonomías de la clase
+          final currentOrderCount = currentByTaxon?[taxonOrder] ?? 0;
+          if (currentOrderCount <= 1) {
+            updateData['speciesIdentified.byClassTaxonomy.$className'] = FieldValue.increment(-1);
+          }
+        }
+
+        await activityRef.update(updateData);
+
+      } else {
+        // El documento no existe, crear uno nuevo
+        await activityRef.set({
+          'userId': userId,
+          'fieldNotesCreated': 0,
+          'photosUploaded': isIncrement ? 1 : 0,
+          'speciesIdentified': {
+            'byTaxon': {
+              taxonOrder: isIncrement ? 1 : 0,
+            },
+            'byClass': {
+              className: isIncrement ? 1 : 0,
+            },
+            'byClassTaxonomy': {
+              className: isIncrement ? 1 : 0,  // Primera taxonomía para esta clase
+            },
+            'totalByTaxon': isIncrement ? 1 : 0,
+            'totalByClass': isIncrement ? 1 : 0,
+          },
+          'lastActivity': FieldValue.serverTimestamp(),
+        });
+      }
+
+      print('✅ User activity updated successfully for user $userId');
+      print('📊 Order: $taxonOrder, Class: $className');
+
+    } catch (error) {
+      print('❌ Error updating user activity: $error');
+    }
   }
 
   void _updateCoordinatesFromFields() {
@@ -377,6 +461,71 @@ class _RegDatosState extends State<RegDatos> {
     return null;
   }
 
+  List<DropdownMenuItem<String>> _getClassesArthropods() {
+    return [
+      'Insecta',
+      'Arachnida'
+    ].map((String value) {
+      return DropdownMenuItem<String>(
+        value: value,
+        child: Text(value),
+      );
+    }).toList();
+  }
+
+  List<DropdownMenuItem<String>> _getTaxonOrder() {
+    return [
+      'Acari', // Arachnida
+      'Amblypygi', // Arachnida
+      'Araneae', // Arachnida
+      'Scorpions', // Arachnida
+      'Solifugae', // Arachnida
+      'Dermaptera', // Insecta
+      'Lepidoptera', // Insecta
+      'Mantodea', // Insecta
+      'Orthoptera', // Insecta
+      'Thysanoptera', // Insecta
+    ].map((String value) {
+      return DropdownMenuItem<String>(
+        value: value,
+        child: Text(value),
+      );
+    }).toList();
+  }
+
+  List<DropdownMenuItem<String>> _getFilteredTaxonOrder() {
+    // Definir qué órdenes pertenecen a cada clase con tipado explícito
+    final Map<String, List<String>> classToOrders = {
+      'Arachnida': ['Acari', 'Amblypygi', 'Araneae', 'Scorpions', 'Solifugae'],
+      'Insecta': ['Dermaptera', 'Lepidoptera', 'Mantodea', 'Orthoptera', 'Thysanoptera'],
+    };
+
+    // Obtener los órdenes para la clase seleccionada, o lista vacía si no hay clase
+    final List<String> orders = className.isNotEmpty
+        ? classToOrders[className] ?? <String>[]
+        : <String>[];
+
+    return orders.map<DropdownMenuItem<String>>((String value) {
+      return DropdownMenuItem<String>(
+        value: value,
+        child: Text(value),
+      );
+    }).toList();
+  }
+
+  String? _getValidClassesValue() {
+    if (className.isNotEmpty && _getClassesArthropods().any((item) => item.value == className)) {
+      return className;
+    }
+    return null;
+  }
+  String? _getValidTaxonValue() {
+    if (taxonOrder.isNotEmpty && _getTaxonOrder().any((item) => item.value == taxonOrder)) {
+      return taxonOrder;
+    }
+    return null;
+  }
+
   List<DropdownMenuItem<String>> _getHabitatItems() {
     return [
       'Jardín urbano',
@@ -508,42 +657,77 @@ class _RegDatosState extends State<RegDatos> {
                             // Formulario
                             Column(
                               children: [
-                                // Clase
-                                TextFormField(
-                                  initialValue: className,
-                                  enabled: !_isProcessing,
-                                  onChanged: (v) => className = v,
-                                  decoration: InputDecoration(
-                                    labelText: 'Clase',
-                                    labelStyle: const TextStyle(color: AppColors.textWhite),
-                                    filled: true,
-                                    fillColor: AppColors.paleGreen,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide.none,
+                                // Clase - Convertido a Dropdown
+                                IgnorePointer(
+                                  ignoring: _isProcessing,
+                                  child: DropdownButtonFormField<String>(
+                                    value: _getValidClassesValue(),
+                                    decoration: InputDecoration(
+                                      labelText: 'Clase',
+                                      labelStyle: const TextStyle(color: AppColors.textWhite),
+                                      filled: true,
+                                      fillColor: _isProcessing
+                                          ? AppColors.paleGreen.withValues(alpha: 0.5)
+                                          : AppColors.paleGreen,
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                        borderSide: BorderSide.none,
+                                      ),
                                     ),
+                                    dropdownColor: AppColors.paleGreen,
+                                    style: TextStyle(
+                                      color: _isProcessing
+                                          ? AppColors.textBlack.withValues(alpha: 0.5)
+                                          : AppColors.textBlack,
+                                    ),
+                                    items: _getClassesArthropods(),
+                                    onChanged: _isProcessing
+                                        ? null
+                                        : (value) {
+                                      setState(() {
+                                        className = value ?? '';
+                                        // Reset taxonOrder cuando cambia la clase
+                                        taxonOrder = '';
+                                      });
+                                    },
+                                    validator: (value) => value?.trim().isEmpty ?? true
+                                        ? 'La clase es requerida' : null,
                                   ),
-                                  style: const TextStyle(color: AppColors.textBlack),
-                                  validator: (value) => value?.trim().isEmpty ?? true 
-                                      ? 'La clase es requerida' : null,
                                 ),
                                 const SizedBox(height: 16),
-                                // Orden taxonómico SOLO LECTURA
-                                TextFormField(
-                                  initialValue: taxonOrder,
-                                  readOnly: true,
-                                  decoration: InputDecoration(
-                                    labelText: 'Orden Taxonómico',
-                                    labelStyle: const TextStyle(color: AppColors.textWhite),
-                                    filled: true,
-                                    fillColor: AppColors.slateGrey.withValues(alpha: 0.3),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide.none,
+                                // Orden taxonómico - Convertido a Dropdown dependiente
+                                IgnorePointer(
+                                  ignoring: _isProcessing || className.isEmpty,
+                                  child: DropdownButtonFormField<String>(
+                                    value: _getValidTaxonValue(),
+                                    decoration: InputDecoration(
+                                      labelText: 'Orden Taxonómico',
+                                      labelStyle: const TextStyle(color: AppColors.textWhite),
+                                      filled: true,
+                                      fillColor: _isProcessing || className.isEmpty
+                                          ? AppColors.slateGrey.withValues(alpha: 0.3)
+                                          : AppColors.paleGreen,
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                      suffixIcon: className.isEmpty
+                                          ? const Icon(Icons.lock, color: AppColors.textPaleGreen)
+                                          : null,
                                     ),
-                                    suffixIcon: const Icon(Icons.lock, color: AppColors.textPaleGreen),
+                                    dropdownColor: AppColors.paleGreen,
+                                    style: TextStyle(
+                                      color: _isProcessing || className.isEmpty
+                                          ? AppColors.textBlack.withValues(alpha: 0.5)
+                                          : AppColors.textBlack,
+                                    ),
+                                    items: _getFilteredTaxonOrder(),
+                                    onChanged: _isProcessing || className.isEmpty
+                                        ? null
+                                        : (value) => setState(() => taxonOrder = value ?? ''),
+                                    validator: (value) => value?.trim().isEmpty ?? true
+                                        ? 'El orden taxonómico es requerido' : null,
                                   ),
-                                  style: const TextStyle(color: AppColors.textBlack),
                                 ),
                                 const SizedBox(height: 16),
                                 // Coordenadas mejoradas
