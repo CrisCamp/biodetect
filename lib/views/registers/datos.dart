@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:biodetect/views/badges/galeria_insignias.dart';
 
 class RegDatos extends StatefulWidget {
   final File? imageFile;
@@ -57,6 +58,8 @@ class _RegDatosState extends State<RegDatos> {
   void initState() {
     super.initState();
     
+    _isEditing = widget.photoId != null;
+
     if (widget.coordenadas != null) {
       _coords = widget.coordenadas!;
       lat = _coords['x'] ?? 0;
@@ -64,12 +67,13 @@ class _RegDatosState extends State<RegDatos> {
       _latitudController.text = lat != 0 ? lat.toString() : '';
       _longitudController.text = lon != 0 ? lon.toString() : '';
     } else {
-      _getCurrentLocation();
+      if (!_isEditing) {
+        _getCurrentLocation();
+      }
     }
     
     className = widget.claseArtropodo;
     taxonOrder = widget.ordenTaxonomico;
-    _isEditing = widget.photoId != null;
     currentImageUrl = widget.imageUrl;
 
     _checkInternetConnection();
@@ -187,7 +191,7 @@ class _RegDatosState extends State<RegDatos> {
           updateData['speciesIdentified.totalByTaxon'] = FieldValue.increment(1);
         } else if (!isIncrement && !isNewOrder) {
           // Al decrementar, verificar si queda en 0 para decrementar el total
-          final currentOrderCount = currentByTaxon?[taxonOrder] ?? 0;
+          final currentOrderCount = currentByTaxon[taxonOrder] ?? 0;
           if (currentOrderCount <= 1) {
             updateData['speciesIdentified.totalByTaxon'] = FieldValue.increment(-1);
           }
@@ -197,7 +201,7 @@ class _RegDatosState extends State<RegDatos> {
           updateData['speciesIdentified.totalByClass'] = FieldValue.increment(1);
         } else if (!isIncrement && !isNewClass) {
           // Al decrementar, verificar si queda en 0 para decrementar el total
-          final currentClassCount = currentByClass?[className] ?? 0;
+          final currentClassCount = currentByClass[className] ?? 0;
           if (currentClassCount <= 1) {
             updateData['speciesIdentified.totalByClass'] = FieldValue.increment(-1);
           }
@@ -206,7 +210,7 @@ class _RegDatosState extends State<RegDatos> {
         // Manejar el contador de taxonomías por clase
         if (isNewOrderForClass && isIncrement) {
           updateData['speciesIdentified.byClassTaxonomy.$className'] = FieldValue.increment(1);
-          print('🆕 New taxonomy for class $className: $taxonOrder');
+          // print('🆕 New taxonomy for class $className: $taxonOrder');
         } else if (!isIncrement && !isNewOrderForClass) {
           // Al decrementar, verificar si queda en 0 para decrementar el total de taxonomías de la clase
           final currentOrderCount = currentByTaxon?[taxonOrder] ?? 0;
@@ -240,33 +244,33 @@ class _RegDatosState extends State<RegDatos> {
         });
       }
 
-      print('✅ User activity updated successfully for user $userId');
-      print('📊 Order: $taxonOrder, Class: $className');
+      // print('✅ User activity updated successfully for user $userId');
+      // print('📊 Order: $taxonOrder, Class: $className');
 
     } catch (error) {
-      print('❌ Error updating user activity: $error');
+      // print('❌ Error updating user activity: $error');
     }
   }
 
-  void _updateCoordinatesFromFields() {
-    // Actualizar las coordenadas desde los campos de texto
-    final latText = _latitudController.text.trim();
-    final lonText = _longitudController.text.trim();
+  // void _updateCoordinatesFromFields() {
+  //   // Actualizar las coordenadas desde los campos de texto
+  //   final latText = _latitudController.text.trim();
+  //   final lonText = _longitudController.text.trim();
     
-    if (latText.isNotEmpty && _latitudRegExp.hasMatch(latText)) {
-      final parsedLat = double.tryParse(latText);
-      if (parsedLat != null && parsedLat >= -90 && parsedLat <= 90) {
-        lat = parsedLat;
-      }
-    }
+  //   if (latText.isNotEmpty && _latitudRegExp.hasMatch(latText)) {
+  //     final parsedLat = double.tryParse(latText);
+  //     if (parsedLat != null && parsedLat >= -90 && parsedLat <= 90) {
+  //       lat = parsedLat;
+  //     }
+  //   }
     
-    if (lonText.isNotEmpty && _longitudRegExp.hasMatch(lonText)) {
-      final parsedLon = double.tryParse(lonText);
-      if (parsedLon != null && parsedLon >= -180 && parsedLon <= 180) {
-        lon = parsedLon;
-      }
-    }
-  }
+  //   if (lonText.isNotEmpty && _longitudRegExp.hasMatch(lonText)) {
+  //     final parsedLon = double.tryParse(lonText);
+  //     if (parsedLon != null && parsedLon >= -180 && parsedLon <= 180) {
+  //       lon = parsedLon;
+  //     }
+  //   }
+  // }
 
   Future<void> _guardarDatos() async {
     if (_isProcessing) return;
@@ -298,7 +302,7 @@ class _RegDatosState extends State<RegDatos> {
 
     try {
       // Actualizar coordenadas desde los campos de texto
-      _updateCoordinatesFromFields();
+      // _updateCoordinatesFromFields(); // No actualizar ubicación al guardar
       
       if (_isEditing) {
         // Modo edición: actualizar registro existente
@@ -317,9 +321,19 @@ class _RegDatosState extends State<RegDatos> {
         
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Datos actualizados correctamente')),
+            const SnackBar(
+              content: Text('Datos actualizados correctamente'),
+              duration: Duration(seconds: 2),
+            ),
           );
-          Navigator.of(context).pop(true);
+          
+          // En modo edición, no verificamos insignias porque no se actualiza la actividad del usuario
+          // Las insignias solo se verifican al crear nuevos registros
+          // NOTA: Sujeto a cambios, aquí se podría considerar verificar insignias en el futuro
+
+          if (mounted) {
+            Navigator.of(context).pop(true);
+          }
         }
       } else {
         // Modo nuevo: crear nuevo registro
@@ -368,9 +382,26 @@ class _RegDatosState extends State<RegDatos> {
         const SnackBar(
           content: Text('Datos guardados correctamente'),
           backgroundColor: AppColors.buttonGreen2,
+          duration: Duration(seconds: 2),
         ),
       );
-      Navigator.of(context).pop('saved');
+      
+      // Pequeña pausa para que se vea el SnackBar antes de las notificaciones
+      await Future.delayed(const Duration(milliseconds: 1000));
+      
+      // Verificar y mostrar notificaciones de nuevas insignias
+      // Solo se hace aquí porque es cuando se actualiza la actividad del usuario con un nuevo registro
+      try {
+        // ignore: use_build_context_synchronously
+        await GaleriaInsigniasScreen.checkAndShowNotifications(context);
+      } catch (e) {
+        // print('Error al verificar insignias: $e');
+        // No mostrar error al usuario, ya que el guardado fue exitoso
+      }
+      
+      if (mounted) {
+        Navigator.of(context).pop('saved');
+      }
     }
   }
 
@@ -384,6 +415,7 @@ class _RegDatosState extends State<RegDatos> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
+          // ignore: use_build_context_synchronously
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Permiso de ubicación denegado')),
           );
@@ -392,6 +424,7 @@ class _RegDatosState extends State<RegDatos> {
         }
       }
       if (permission == LocationPermission.deniedForever) {
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Permiso de ubicación denegado permanentemente')),
         );
@@ -410,6 +443,7 @@ class _RegDatosState extends State<RegDatos> {
         _isGettingLocation = false;
       });
       
+      // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Ubicación obtenida correctamente'),

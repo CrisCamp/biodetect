@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:biodetect/views/notes/mis_bitacoras.dart';
 import 'package:biodetect/views/user/editar_perfil.dart';
 import 'package:biodetect/views/session/inicio_sesion.dart';
+import 'package:biodetect/views/badges/galeria_insignias.dart';
 import 'package:flutter/material.dart';
 import 'package:biodetect/themes.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -322,6 +323,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         label: "Insignias",
                         value: insignias,
                         iconColor: AppColors.textBlueNormal,
+                        onTap: () async {
+                          final hadChanges = await Navigator.push<bool>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const GaleriaInsigniasScreen(),
+                            ),
+                          );
+                          
+                          // Si hubo cambios en las insignias, recargar los datos del perfil
+                          if (hadChanges == true) {
+                            setState(() {
+                              _userDataFuture = _loadUserData();
+                            });
+                          }
+                        },
                       ),
                     ],
                   ),
@@ -418,46 +434,51 @@ class _EstadisticaCard extends StatelessWidget {
   final String label;
   final int value;
   final Color iconColor;
+  final VoidCallback? onTap;
 
   const _EstadisticaCard({
     required this.icon,
     required this.label,
     required this.value,
     required this.iconColor,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Card(
-        color: AppColors.backgroundCard,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        margin: const EdgeInsets.symmetric(horizontal: 8),
-        child: SizedBox(
-          height: 120,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 40, color: iconColor),
-              const SizedBox(height: 8),
-              Text(
-                value.toString(),
-                style: const TextStyle(
-                  color: AppColors.textWhite,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Card(
+          color: AppColors.backgroundCard,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          margin: const EdgeInsets.symmetric(horizontal: 8),
+          child: SizedBox(
+            height: 120,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 40, color: iconColor),
+                const SizedBox(height: 8),
+                Text(
+                  value.toString(),
+                  style: const TextStyle(
+                    color: AppColors.textWhite,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppColors.textWhite,
-                  fontSize: 12,
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.textWhite,
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
