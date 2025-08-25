@@ -12,7 +12,20 @@
           "package_name": "com.example.biodetect"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "957544639048-jsik4d55aako0hiffqinmla39988mvsa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.biodetect",
+            "certificate_hash": "cb3841c96b0255c482ddf60aac57f61d380f52c3"
+          }
+        },
+        {
+          "client_id": "957544639048-dadfvovgbcmugcd87sksjs4g11mrup6s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB3fl_eVDXZq1SY9fqzJWDuj56ATd5294s"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "957544639048-dadfvovgbcmugcd87sksjs4g11mrup6s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

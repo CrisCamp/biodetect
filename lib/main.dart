@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:biodetect/menu.dart';
 import 'package:biodetect/views/session/inicio_sesion.dart';
@@ -50,8 +51,46 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
+  bool _isCheckingAutoLogin = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAutoLoginFirst();
+  }
+
+  Future<void> _checkAutoLoginFirst() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final autoLogin = prefs.getBool('auto_login') ?? false;
+      final user = FirebaseAuth.instance.currentUser;
+
+      // Si hay usuario pero NO marcó recordar sesión, hacer logout
+      if (user != null && !autoLogin) {
+        await prefs.clear();
+        await FirebaseAuth.instance.signOut();
+      }
+    } catch (e) {
+      // Si hay error, simplemente continuar
+    }
+
+    setState(() {
+      _isCheckingAutoLogin = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Mostrar loading mientras verificamos auto-login
+    if (_isCheckingAutoLogin) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: CircularProgressIndicator(color: Colors.green),
+        ),
+      );
+    }
+
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -59,15 +98,25 @@ class _AuthWrapperState extends State<AuthWrapper> {
           return const Scaffold(
             backgroundColor: Colors.white,
             body: Center(
-              child: CircularProgressIndicator(
-                color: Colors.green,
-              ),
+              child: CircularProgressIndicator(color: Colors.green),
             ),
           );
         }
         
-        if (snapshot.hasData && snapshot.data != null) {
-          return const MainMenu();
+        final user = snapshot.data;
+        
+        if (user != null) {
+          if (user.providerData.any((info) => info.providerId == 'password')) {
+            if (user.emailVerified) {
+              return const MainMenu();
+            } else {
+              // Usuario no verificado, enviar de vuelta al login
+              return const InicioSesion();
+            }
+          } 
+          else {
+            return const MainMenu();
+          }
         }
         
         return const InicioSesion();
