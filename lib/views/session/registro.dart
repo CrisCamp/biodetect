@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:biodetect/views/legal/terminos_condiciones.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class Registro extends StatefulWidget {
   const Registro({super.key});
@@ -56,19 +57,27 @@ class _RegistroState extends State<Registro> {
       });
       return;
     }
+
     setState(() {
       _loading = true;
       _error = null;
     });
+
     try {
-      // Crear usuario en Firebase Auth
+      // Crear cuenta
       final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      
       final user = credential.user;
       if (user != null) {
-        // Guardar datos en Firestore
+        // Actualizar displayName
+        await user.updateDisplayName(_nombreController.text.trim());
+        
+        await user.sendEmailVerification();
+        
+        // Crear documento del usuario en Firestore
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'uid': user.uid,
           'email': user.email,
@@ -78,10 +87,24 @@ class _RegistroState extends State<Registro> {
           'loginAt': FieldValue.serverTimestamp(),
           'badges': [],
         });
-        await user.sendEmailVerification();
 
-        await credential.user?.updateDisplayName(_nombreController.text.trim());
+        // Crear documento user_activity con estructura completa
+        await _createUserActivityDocument(user.uid);
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        
+        await FirebaseAuth.instance.signOut();
+
         if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('¡Cuenta creada! Verifica tu correo antes de iniciar sesión.'),
+              backgroundColor: AppColors.buttonGreen2,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          
           Navigator.pop(context);
         }
       }
@@ -110,6 +133,44 @@ class _RegistroState extends State<Registro> {
         _loading = false;
       });
     }
+  }
+
+  // Crear documento user_activity con estructura completa según especificaciones
+  Future<void> _createUserActivityDocument(String userId) async {
+    final activityDoc = FirebaseFirestore.instance.collection('user_activity').doc(userId);
+    
+    await activityDoc.set({
+      'userId': userId,
+      'fieldNotesCreated': 0,
+      'photosUploaded': 0,
+      'lastActivity': FieldValue.serverTimestamp(),
+      'speciesIdentified': {
+        'byClass': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byClassTaxonomy': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byTaxon': {
+          // Arachnida (5 órdenes)
+          'Acari': 0,
+          'Amblypygi': 0,
+          'Araneae': 0,
+          'Scorpions': 0,
+          'Solifugae': 0,
+          // Insecta (5 órdenes)
+          'Dermaptera': 0,
+          'Lepidoptera': 0,
+          'Mantodea': 0,
+          'Orthoptera': 0,
+          'Thysanoptera': 0,
+        },
+        'totalByClass': 0,
+        'totalByTaxon': 0,
+      },
+    });
   }
 
   @override

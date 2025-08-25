@@ -51,16 +51,14 @@ class _InicioSesionState extends State<InicioSesion> {
     });
   }
 
-  // Verificar si hay una sesión activa para login automático
+  // Verificar si hay una sesión activa para login automático (SIMPLIFICADO)
   Future<void> _checkAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
     final autoLogin = prefs.getBool('auto_login') ?? false;
-
-    // Verificar si hay usuario logueado en Firebase
     final user = FirebaseAuth.instance.currentUser;
 
-    if (autoLogin && user != null) {
-      // Si está marcado "recordar sesión" y hay usuario activo, ir al menu
+    // Solo hacer auto-login si está explícitamente habilitado Y hay usuario
+    if (user != null && autoLogin) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           Navigator.pushReplacement(
@@ -70,6 +68,7 @@ class _InicioSesionState extends State<InicioSesion> {
         }
       });
     }
+    // Ya no necesitas hacer logout aquí porque main.dart se encarga
   }
 
   // Guardar preferencias de "recordar sesión"
@@ -89,7 +88,116 @@ class _InicioSesionState extends State<InicioSesion> {
     }
   }
 
-  // Función para login con Google (actualizada)
+  // Función para login con correo/contraseña (CORREGIDA)
+  Future<void> _onLogin() async {
+    if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
+      setState(() {
+        _error = 'Por favor completa todos los campos.';
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      final user = credential.user;
+      if (user != null) {
+        if (!user.emailVerified) {
+          // Reenviar correo de verificación
+          await user.sendEmailVerification();
+          
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('auto_login', false);
+          
+          setState(() {
+            _error = 'Debes verificar tu correo antes de continuar. Te hemos reenviado el enlace de verificación.';
+          });
+          
+          await FirebaseAuth.instance.signOut();
+          return;
+        }
+
+        // Crear/actualizar documento del usuario (solo si está verificado)
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final docSnapshot = await userDoc.get();
+
+        if (docSnapshot.exists) {
+          final data = docSnapshot.data();
+          if (data != null && data['email'] != user.email) {
+            await userDoc.update({'email': user.email});
+          }
+          await userDoc.update({
+            'loginAt': FieldValue.serverTimestamp(),
+          });
+        } else {
+          await userDoc.set({
+            'uid': user.uid,
+            'email': user.email,
+            'fullname': user.displayName ?? '',
+            'profilePicture': user.photoURL ?? '',
+            'createdAt': FieldValue.serverTimestamp(),
+            'loginAt': FieldValue.serverTimestamp(),
+            'badges': [],
+          });
+          await _createUserActivityDocument(user.uid);
+        }
+        await _saveRememberPreference(_emailController.text.trim(), _remember);
+        // Navegar al menu principal
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const MainMenu()),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('auto_login', false);
+      
+      setState(() {
+        switch (e.code) {
+          case 'user-not-found':
+            _error = 'No existe una cuenta con este correo.';
+            break;
+          case 'wrong-password':
+            _error = 'La contraseña es incorrecta.';
+            break;
+          case 'invalid-email':
+            _error = 'El correo no es válido.';
+            break;
+          case 'invalid-credential':
+            _error = 'Correo o contraseña incorrectos.';
+            break;
+          case 'too-many-requests':
+            _error = 'Demasiados intentos fallidos. Intenta de nuevo más tarde.';
+            break;
+          default:
+            _error = 'No se pudo iniciar sesión. Verifica tus datos e inténtalo de nuevo.';
+        }
+      });
+    } catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('auto_login', false);
+      
+      setState(() {
+        _error = 'Error inesperado: $e';
+      });
+    } finally {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  // Función para login con Google (CORREGIDA - Google no requiere verificación de email)
   Future<void> _onGoogleSignIn() async {
     setState(() {
       _loading = true;
@@ -97,6 +205,8 @@ class _InicioSesionState extends State<InicioSesion> {
     });
 
     try {
+      await GoogleSignIn().signOut();
+      
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
 
       if (googleUser == null) {
@@ -107,6 +217,7 @@ class _InicioSesionState extends State<InicioSesion> {
       }
 
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
@@ -130,15 +241,14 @@ class _InicioSesionState extends State<InicioSesion> {
             'loginAt': FieldValue.serverTimestamp(),
             'badges': [],
           });
+          
+          await _createUserActivityDocument(user.uid);
         } else {
           await userDoc.update({
             'loginAt': FieldValue.serverTimestamp(),
           });
         }
-
-        // Guardar preferencias si "recordar sesión" está marcado
         await _saveRememberPreference(user.email ?? '', _remember);
-
         // Navegar al menu principal
         if (mounted) {
           Navigator.pushReplacement(
@@ -148,6 +258,9 @@ class _InicioSesionState extends State<InicioSesion> {
         }
       }
     } on FirebaseAuthException catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('auto_login', false);
+      
       setState(() {
         switch (e.code) {
           case 'account-exists-with-different-credential':
@@ -159,11 +272,17 @@ class _InicioSesionState extends State<InicioSesion> {
           case 'operation-not-allowed':
             _error = 'El login con Google no está habilitado.';
             break;
+          case 'network-request-failed':
+            _error = 'Error de conexión. Verifica tu internet e intenta de nuevo.';
+            break;
           default:
             _error = e.message ?? 'Error al iniciar sesión con Google.';
         }
       });
     } catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('auto_login', false);
+      
       setState(() {
         _error = 'Error inesperado: $e';
       });
@@ -174,106 +293,42 @@ class _InicioSesionState extends State<InicioSesion> {
     }
   }
 
-  // Función para login con correo/contraseña (actualizada)
-  Future<void> _onLogin() async {
-    if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
-      setState(() {
-        _error = 'Por favor completa todos los campos.';
-      });
-      return;
-    }
-
-    setState(() {
-      _loading = true;
-      _error = null;
+  // Crear documento user_activity para usuarios de Google también
+  Future<void> _createUserActivityDocument(String userId) async {
+    final activityDoc = FirebaseFirestore.instance.collection('user_activity').doc(userId);
+    
+    await activityDoc.set({
+      'userId': userId,
+      'fieldNotesCreated': 0,
+      'photosUploaded': 0,
+      'lastActivity': FieldValue.serverTimestamp(),
+      'speciesIdentified': {
+        'byClass': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byClassTaxonomy': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byTaxon': {
+          // Arachnida (5 órdenes)
+          'Acari': 0,
+          'Amblypygi': 0,
+          'Araneae': 0,
+          'Scorpions': 0,
+          'Solifugae': 0,
+          // Insecta (5 órdenes)
+          'Dermaptera': 0,
+          'Lepidoptera': 0,
+          'Mantodea': 0,
+          'Orthoptera': 0,
+          'Thysanoptera': 0,
+        },
+        'totalByClass': 0,
+        'totalByTaxon': 0,
+      },
     });
-
-    try {
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-      );
-
-      final user = credential.user;
-      if (user != null) {
-        // Crear/actualizar documento del usuario
-        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-        final docSnapshot = await userDoc.get();
-
-        // Actualiza el correo en Firestore si es diferente
-        if (docSnapshot.exists) {
-          final data = docSnapshot.data();
-          if (data != null && data['email'] != user.email) {
-            await userDoc.update({'email': user.email});
-          }
-          // Actualiza la fecha de login
-          await userDoc.update({
-            'loginAt': FieldValue.serverTimestamp(),
-          });
-        } else {
-          await userDoc.set({
-            'uid': user.uid,
-            'email': user.email,
-            'fullname': user.displayName ?? '',
-            'profilePicture': user.photoURL ?? '',
-            'createdAt': FieldValue.serverTimestamp(),
-            'loginAt': FieldValue.serverTimestamp(),
-            'badges': [],
-          });
-        }
-
-        // Verificar si el correo está verificado
-        if (!user.emailVerified) {
-          await user.sendEmailVerification();
-          setState(() {
-            _error = 'Debes verificar tu correo antes de continuar. Te hemos reenviado el enlace de verificación.';
-          });
-          await FirebaseAuth.instance.signOut();
-          return;
-        }
-
-        // Guardar preferencias si "recordar sesión" está marcado
-        await _saveRememberPreference(_emailController.text.trim(), _remember);
-
-        // Navegar al menu principal
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const MainMenu()),
-          );
-        }
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        switch (e.code) {
-          case 'user-not-found':
-            _error = 'No existe una cuenta con este correo.';
-            break;
-          case 'wrong-password':
-            _error = 'La contraseña es incorrecta.';
-            break;
-          case 'invalid-email':
-            _error = 'El correo no es válido.';
-            break;
-          case 'invalid-credential':
-            _error = 'Correo o contraseña incorrectos.';
-            break;
-          case 'too-many-requests':
-            _error = 'Demasiados intentos fallidos. Intenta de nuevo más tarde.';
-            break;
-          default:
-            _error = 'No se pudo iniciar sesión. Verifica tus datos e inténtalo de nuevo.';
-        }
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'Error inesperado: $e';
-      });
-    } finally {
-      setState(() {
-        _loading = false;
-      });
-    }
   }
 
   @override

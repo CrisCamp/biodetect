@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:async';
 import 'package:biodetect/views/notes/mis_bitacoras.dart';
 import 'package:biodetect/views/user/editar_perfil.dart';
-import 'package:biodetect/views/session/inicio_sesion.dart';
 import 'package:biodetect/views/badges/galeria_insignias.dart';
 import 'package:flutter/material.dart';
 import 'package:biodetect/themes.dart';
@@ -10,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -147,25 +147,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (confirmar == true && context.mounted) {
       try {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => const Center(
-            child: CircularProgressIndicator(color: AppColors.mintGreen),
-          ),
-        );
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('auto_login', false);
-        await FirebaseAuth.instance.signOut();
-        if (context.mounted) Navigator.of(context).pop();
-        if (context.mounted) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const InicioSesion()),
-            (route) => false,
-          );
+        await prefs.clear();
+        try {
+          await GoogleSignIn().signOut();
+        } catch (e) {
         }
+        await FirebaseAuth.instance.signOut();
       } catch (e) {
-        if (context.mounted) Navigator.of(context).pop();
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
