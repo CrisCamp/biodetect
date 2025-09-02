@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/datos.dart';
+import 'package:biodetect/views/registers/fotos_pendientes.dart';
 import 'package:biodetect/services/pending_photos_service.dart';
 import 'package:biodetect/services/ai_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -23,11 +25,15 @@ class _CapturaFotoState extends State<CapturaFoto> {
   bool _isProcessing = false;
   bool _hasInternet = true;
   Position? _currentPosition;
+  Timer? _connectionCheckTimer; // Timer para verificación de conexión automática
+  int _pendingCount = 0; // Contador de fotos pendientes
 
   @override
   void initState() {
     super.initState();
     _checkInternetConnection();
+    _startPeriodicConnectionCheck(); // Iniciar verificación de conexión automática
+    _loadPendingCount(); // Cargar conteo de fotos pendientes
   }
 
   Future<void> _checkInternetConnection() async {
@@ -39,6 +45,39 @@ class _CapturaFotoState extends State<CapturaFoto> {
     } catch (_) {
       setState(() {
         _hasInternet = false;
+      });
+    }
+  }
+
+  // Verificar si el error es relacionado con la conexión
+  bool _isConnectionError(dynamic error) {
+    final errorString = error.toString().toLowerCase();
+    return errorString.contains('network') || 
+           errorString.contains('connection') || 
+           errorString.contains('internet') ||
+           errorString.contains('timeout') ||
+           errorString.contains('failed host lookup') ||
+           errorString.contains('socketexception') ||
+           errorString.contains('httpexception') ||
+           errorString.contains('clientexception') ||
+           errorString.contains('no address associated with hostname') ||
+           errorString.contains('unreachable');
+  }
+
+  // Verificación periódica de conexión (cada 10 segundos)
+  void _startPeriodicConnectionCheck() {
+    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _checkInternetConnection();
+    });
+  }
+
+  // Cargar conteo de fotos pendientes
+  Future<void> _loadPendingCount() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final count = await PendingPhotosService.getPendingCount(user.uid);
+      setState(() {
+        _pendingCount = count;
       });
     }
   }
@@ -119,6 +158,22 @@ class _CapturaFotoState extends State<CapturaFoto> {
     }
 
     try {
+      // Verificación adicional de conexión justo antes del procesamiento
+      await _checkInternetConnection();
+      
+      // Si perdimos la conexión después de la verificación inicial
+      if (!_hasInternet) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Se perdió la conexión a internet. La foto se guardará como pendiente.'),
+            backgroundColor: AppColors.warning,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        await _guardarPendiente();
+        return;
+      }
+
       final Map<String, dynamic> response = await AIService.analyzeImage(_image!);
 
       final String clasificacion = response['predicted_class'];
@@ -165,12 +220,29 @@ class _CapturaFotoState extends State<CapturaFoto> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al procesar la foto: ${e.toString()}'),
-            backgroundColor: AppColors.warning,
-          ),
-        );
+        // Verificar si es un error de conexión
+        if (_isConnectionError(e)) {
+          // Es un error de conexión - actualizar estado y guardar como pendiente
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error de conexión. La foto se guardará como pendiente para analizarla más tarde.'),
+              backgroundColor: AppColors.warning,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          // Guardar como pendiente automáticamente
+          await _guardarPendiente();
+        } else {
+          // Otro tipo de error
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al procesar la foto: ${e.toString()}'),
+              backgroundColor: AppColors.warning,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
       }
     }
 
@@ -204,13 +276,17 @@ class _CapturaFotoState extends State<CapturaFoto> {
         setState(() {
           _image = null;
         });
+        
+        // Actualizar conteo de fotos pendientes
+        _loadPendingCount();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al guardar: $e'),
+            content: Text('Error al guardar la foto como pendiente: $e'),
             backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -398,10 +474,22 @@ class _CapturaFotoState extends State<CapturaFoto> {
       }
     } catch (e) {
       if (mounted) {
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet e inténtalo de nuevo.';
+        } else {
+          errorMessage = 'Error al enviar: $e';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al enviar: $e'),
+            content: Text(errorMessage),
             backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -469,47 +557,72 @@ class _CapturaFotoState extends State<CapturaFoto> {
                             ],
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.refresh),
-                          color: AppColors.white,
-                          onPressed: _checkInternetConnection,
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.schedule_outlined),
+                              color: AppColors.white,
+                              tooltip: 'Ver fotos pendientes',
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => const FotosPendientes(),
+                                  ),
+                                ).then((_) {
+                                  // Actualizar conteo cuando regrese de fotos pendientes
+                                  _loadPendingCount();
+                                });
+                              },
+                            ),
+                            if (_pendingCount > 0)
+                              Positioned(
+                                right: 8,
+                                top: 8,
+                                child: Container(
+                                  constraints: const BoxConstraints(
+                                    minWidth: 18,
+                                    minHeight: 18,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      colors: [
+                                        Color(0xFFFF6B6B),
+                                        Color(0xFFEE5A24),
+                                      ],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: const Color(0xFFFF6B6B).withOpacity(0.4),
+                                        spreadRadius: 1,
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Text(
+                                    _pendingCount.toString(),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ],
                     ),
                     const SizedBox(height: 20),
-                    Container(
-                      height: 440,
-                      decoration: BoxDecoration(
-                        color: AppColors.backgroundCard,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: AppColors.buttonGreen2,
-                          width: 2,
-                        ),
-                      ),
-                      alignment: Alignment.center,
-                      child: _image == null
-                          ? const Text(
-                              'Aquí se mostrará la foto',
-                              style: TextStyle(
-                                color: AppColors.textPaleGreen,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
-                            )
-                          : ClipRRect(
-                              borderRadius: BorderRadius.circular(18),
-                              child: Image.file(
-                                _image!, 
-                                fit: BoxFit.cover, 
-                                width: double.infinity, 
-                                height: 440,
-                              ),
-                            ),
-                    ),
-                    const SizedBox(height: 20),
-                    if (!_hasInternet && _image == null) ...[
+                    // Mensaje de sin conexión (movido aquí desde abajo)
+                    if (!_hasInternet) ...[
                       Card(
                         color: AppColors.backgroundCard,
                         shape: RoundedRectangleBorder(
@@ -547,7 +660,41 @@ class _CapturaFotoState extends State<CapturaFoto> {
                           ),
                         ),
                       ),
-                    ] else if (_image == null) ...[
+                      const SizedBox(height: 16),
+                    ],
+                    Container(
+                      height: 440,
+                      decoration: BoxDecoration(
+                        color: AppColors.backgroundCard,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: AppColors.buttonGreen2,
+                          width: 2,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: _image == null
+                          ? const Text(
+                              'Aquí se mostrará la foto',
+                              style: TextStyle(
+                                color: AppColors.textPaleGreen,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            )
+                          : ClipRRect(
+                              borderRadius: BorderRadius.circular(18),
+                              child: Image.file(
+                                _image!, 
+                                fit: BoxFit.cover, 
+                                width: double.infinity, 
+                                height: 440,
+                              ),
+                            ),
+                    ),
+                    const SizedBox(height: 20),
+                    if (_image == null) ...[
                       Card(
                         color: AppColors.backgroundCard,
                         shape: RoundedRectangleBorder(
@@ -569,7 +716,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
                               ),
                               SizedBox(height: 8),
                               Text(
-                                '• Enfocar bien el insecto/arácnido',
+                                '• Enfocar bien el artrópodo',
                                 style: TextStyle(
                                   color: AppColors.textWhite,
                                   fontSize: 14,
@@ -711,5 +858,11 @@ class _CapturaFotoState extends State<CapturaFoto> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _connectionCheckTimer?.cancel(); // Cancelar el timer de verificación de conexión
+    super.dispose();
   }
 }

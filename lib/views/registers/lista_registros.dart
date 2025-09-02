@@ -163,7 +163,7 @@ class _ListaRegistrosState extends State<ListaRegistros> {
   }
 
   Widget _buildRegistroTile(Map<String, dynamic> registro) {
-    final isOnline = registro['isOnline'] ?? true; // Asumir que es online por defecto
+    // final isOnline = registro['isOnline'] ?? true; // Asumir que es online por defecto
     final imageSource = registro['imageUrl'] ?? '';
 
     return Card(
@@ -250,21 +250,21 @@ class _ListaRegistrosState extends State<ListaRegistros> {
                           ),
                         ),
                         // Indicador de estado
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: isOnline ? AppColors.buttonGreen2 : AppColors.warning,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            isOnline ? 'Online' : 'Offline',
-                            style: const TextStyle(
-                              color: AppColors.textBlack,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
+                        // Container(
+                        //   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        //   decoration: BoxDecoration(
+                        //     color: isOnline ? AppColors.buttonGreen2 : AppColors.warning,
+                        //     borderRadius: BorderRadius.circular(8),
+                        //   ),
+                        //   child: Text(
+                        //     isOnline ? 'Online' : 'Offline',
+                        //     style: const TextStyle(
+                        //       color: AppColors.textBlack,
+                        //       fontSize: 10,
+                        //       fontWeight: FontWeight.bold,
+                        //     ),
+                        //   ),
+                        // ),
                       ],
                     ),
                     const SizedBox(height: 4),

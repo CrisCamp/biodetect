@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/services/pending_photos_service.dart';
 import 'package:biodetect/services/ai_service.dart';
@@ -21,12 +22,14 @@ class _FotosPendientesState extends State<FotosPendientes> {
   bool _isLoading = true;
   bool _hasInternet = false;
   final Set<String> _processingPhotos = {};
+  Timer? _connectionCheckTimer; // Timer para verificación de conexión automática
 
   @override
   void initState() {
     super.initState();
     _loadPendingPhotos();
     _checkInternetConnection();
+    _startPeriodicConnectionCheck(); // Iniciar verificación de conexión automática
   }
 
   // Reemplazar la función de SyncService por una local
@@ -41,6 +44,28 @@ class _FotosPendientesState extends State<FotosPendientes> {
         _hasInternet = false;
       });
     }
+  }
+
+  // Verificar si el error es relacionado con la conexión
+  bool _isConnectionError(dynamic error) {
+    final errorString = error.toString().toLowerCase();
+    return errorString.contains('network') || 
+           errorString.contains('connection') || 
+           errorString.contains('internet') ||
+           errorString.contains('timeout') ||
+           errorString.contains('failed host lookup') ||
+           errorString.contains('socketexception') ||
+           errorString.contains('httpexception') ||
+           errorString.contains('clientexception') ||
+           errorString.contains('no address associated with hostname') ||
+           errorString.contains('unreachable');
+  }
+
+  // Verificación periódica de conexión (cada 10 segundos)
+  void _startPeriodicConnectionCheck() {
+    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _checkInternetConnection();
+    });
   }
 
   Future<void> _loadPendingPhotos() async {
@@ -58,6 +83,7 @@ class _FotosPendientesState extends State<FotosPendientes> {
   }
 
   Future<void> _clasificarFoto(Map<String, dynamic> photo) async {
+    // Verificación inicial de conexión
     if (!_hasInternet) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -76,6 +102,21 @@ class _FotosPendientesState extends State<FotosPendientes> {
     });
 
     try {
+      // Verificación adicional de conexión justo antes del procesamiento
+      await _checkInternetConnection();
+      
+      // Si perdimos la conexión después de la verificación inicial
+      if (!_hasInternet) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Se perdió la conexión a internet. Inténtalo de nuevo cuando tengas conexión.'),
+            backgroundColor: AppColors.warning,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
       final imageFile = File(photo['localImagePath']);
       if (!await imageFile.exists()) {
         throw Exception('Archivo de imagen no encontrado');
@@ -127,10 +168,23 @@ class _FotosPendientesState extends State<FotosPendientes> {
       }
     } catch (e) {
       if (mounted) {
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet e inténtalo de nuevo.';
+        } else {
+          errorMessage = 'Error al analizar: $e';
+        }
+        
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al analizar: $e'),
+            content: Text(errorMessage),
             backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -318,10 +372,22 @@ class _FotosPendientesState extends State<FotosPendientes> {
       }
     } catch (e) {
       if (mounted) {
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet e inténtalo de nuevo.';
+        } else {
+          errorMessage = 'Error al enviar: $e';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al enviar: $e'),
+            content: Text(errorMessage),
             backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -416,15 +482,6 @@ class _FotosPendientesState extends State<FotosPendientes> {
                           ),
                         ],
                       ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      color: AppColors.textWhite,
-                      onPressed: () {
-                        _checkInternetConnection();
-                        _loadPendingPhotos();
-                      },
-                      iconSize: 24,
                     ),
                   ],
                 ),
@@ -632,5 +689,11 @@ class _FotosPendientesState extends State<FotosPendientes> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _connectionCheckTimer?.cancel(); // Cancelar el timer de verificación de conexión
+    super.dispose();
   }
 }

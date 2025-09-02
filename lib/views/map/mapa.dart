@@ -26,6 +26,7 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
   bool _isLoading = true;
   bool _hasLocationPermission = false;
   String? _mapError;
+  mapbox.PointAnnotation? _currentLocationAnnotation; // Referencia al marcador de ubicación
 
   final Map<String, String> _loadedMarkerImageIds = {};
 
@@ -83,8 +84,9 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       
       print('Ubicación obtenida: ${position.latitude}, ${position.longitude}');
       
-      // Si el mapa ya está creado, centrar en la ubicación actual
+      // Si el mapa ya está creado, agregar marcador y centrar en la ubicación actual
       if (mapboxMap != null) {
+        await _addCurrentLocationMarker();
         await _centerOnCurrentLocation();
       }
     } catch (e) {
@@ -344,11 +346,13 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
           mapbox.LocationComponentSettings(
             enabled: true,
             puckBearingEnabled: true,
+            pulsingEnabled: true, // Añadir pulsación para mejor visibilidad
             locationPuck: mapbox.LocationPuck(
               locationPuck2D: mapbox.LocationPuck2D(
                 bearingImage: null,
                 shadowImage: null,
                 topImage: null,
+                // El puck por defecto será más visible
               ),
             ),
           ),
@@ -359,6 +363,11 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       // Agregar marcadores si ya están cargados
       if (_userPhotos.isNotEmpty) {
         await _addPhotoMarkers();
+      }
+      
+      // Agregar marcador de ubicación actual si está disponible
+      if (_currentPosition != null) {
+        await _addCurrentLocationMarker();
       }
       
       // Centrar en ubicación actual si está disponible
@@ -373,6 +382,35 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
       setState(() {
         _mapError = e.toString();
       });
+    }
+  }
+
+  Future<void> _addCurrentLocationMarker() async {
+    if (_currentPosition == null || pointAnnotationManager == null || mapboxMap == null) return;
+    
+    try {
+      // Eliminar marcador anterior si existe
+      if (_currentLocationAnnotation != null) {
+        await pointAnnotationManager!.delete(_currentLocationAnnotation!);
+        _currentLocationAnnotation = null;
+      }
+      
+      // Crear un marcador distintivo para la ubicación actual
+      final pointAnnotationOptions = mapbox.PointAnnotationOptions(
+        geometry: mapbox.Point(
+          coordinates: mapbox.Position.named(
+            lng: _currentPosition!.longitude,
+            lat: _currentPosition!.latitude,
+          ),
+        ),
+        iconColor: const Color.fromARGB(255, 19, 21, 173).value,
+        iconSize: 5.0,
+      );
+      
+      _currentLocationAnnotation = await pointAnnotationManager!.create(pointAnnotationOptions);
+      print('Marcador de ubicación actual agregado/actualizado');
+    } catch (e) {
+      print('Error agregando marcador de ubicación actual: $e');
     }
   }
 
@@ -536,9 +574,12 @@ class _MapaIterativoScreenState extends State<MapaIterativoScreen> {
                       bottom: 24,
                       right: 24,
                       child: FloatingActionButton(
-                        backgroundColor: AppColors.buttonGreen3,
+                        backgroundColor: AppColors.buttonGreen2,
+                        onPressed: () async {
+                          // Obtener ubicación actualizada y centrar
+                          await _getCurrentLocation();
+                        },
                         child: Icon(_hasLocationPermission ? Icons.my_location : Icons.location_disabled),
-                        onPressed: _centerOnCurrentLocation,
                       ),
                     ),
                   ],

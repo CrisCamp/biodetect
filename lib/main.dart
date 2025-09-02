@@ -11,7 +11,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Configurar Mapbox access token
-  const String mapboxAccessToken = "pk.eyJ1IjoiZmVybHVpczIzIiwiYSI6ImNtZHJuMnpjcTA0YTEyam9uemRnYXFzejcifQ.Vq4CbCsJLoga51jxmKyfTA";
+  const String mapboxAccessToken = "pk.eyJ1IjoiYmlvZGV0ZWN0YXBwIiwiYSI6ImNtZjAyMnE1YTBpaXYydHByaTR3dm9xZjkifQ.wrMFQYEPE_iWQnezMPPbwQ";
   mapbox.MapboxOptions.setAccessToken(mapboxAccessToken);
   
   // Inicializar Firebase

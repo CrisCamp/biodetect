@@ -1,6 +1,6 @@
-import 'package:biodetect/screens/note_screen.dart';
+import 'package:biodetect/views/notes/explorar_bitacoras_publicas_screen.dart';
 import 'package:biodetect/screens/forum_screen.dart';
-import 'package:biodetect/screens/home_screen.dart';
+import 'package:biodetect/views/registers/album_fotos.dart';
 import 'package:biodetect/screens/profile_screen.dart';
 import 'package:biodetect/themes.dart';
 import 'package:flutter/material.dart';
@@ -16,9 +16,9 @@ class MainMenu extends StatefulWidget {
 class _MainMenuState extends State<MainMenu> {
   int _currentIndex = 0;
   final List<Widget> _screens = [
-    const HomeScreen(),
+    const AlbumFotos(), // Cambiamos a AlbumFotos como principal
     const ForumScreen(),
-    const BinnacleScreen(),
+    const ExplorarBitacorasPublicasScreen(),
     const ProfileScreen(),
   ];
 
@@ -38,8 +38,8 @@ class _MainMenuState extends State<MainMenu> {
         unselectedIconTheme: const IconThemeData(size: 24),
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
+            icon: Icon(Icons.photo_library),
+            label: 'Album',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.forum),
