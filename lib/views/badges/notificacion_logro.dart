@@ -8,6 +8,7 @@ class NotificacionLogroScreen extends StatelessWidget {
   final String? lottieAsset; // Ejemplo: 'assets/badge_unlocked_anim.json'
   final String? imagenInsignia; // Ejemplo: 'assets/ic_badge_expert.png'
   final VoidCallback? onOk;
+  final bool showContinueButton; // Para mostrar "Continuar" en lugar de "OK" cuando hay más insignias
 
   const NotificacionLogroScreen({
     super.key,
@@ -17,6 +18,7 @@ class NotificacionLogroScreen extends StatelessWidget {
     this.lottieAsset,
     this.imagenInsignia,
     this.onOk,
+    this.showContinueButton = false,
   });
 
   @override
@@ -42,7 +44,7 @@ class NotificacionLogroScreen extends StatelessWidget {
               Card(
                 color: AppColors.backgroundCard,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 elevation: 8,
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -63,25 +65,35 @@ class NotificacionLogroScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       // Imagen de la insignia
                       Container(
-                        width: 80,
-                        height: 80,
+                        width: 100,
+                        height: 100,
                         margin: const EdgeInsets.only(top: 8),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.aquaBlue,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          // ignore: deprecated_member_use
+                          color: AppColors.slateGreen.withOpacity(0.3),
                         ),
-                        child: imagenInsignia != null
-                            ? Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Image.asset(
-                            imagenInsignia!,
-                            fit: BoxFit.contain,
-                          ),
-                        )
-                            : const Icon(
-                          Icons.emoji_events,
-                          color: AppColors.textWhite,
-                          size: 40,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: imagenInsignia != null
+                              ? Image.asset(
+                                  imagenInsignia!,
+                                  width: 100,
+                                  height: 100,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return const Icon(
+                                      Icons.emoji_events,
+                                      color: AppColors.textWhite,
+                                      size: 50,
+                                    );
+                                  },
+                                )
+                              : const Icon(
+                                  Icons.emoji_events,
+                                  color: AppColors.textWhite,
+                                  size: 50,
+                                ),
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -111,9 +123,10 @@ class NotificacionLogroScreen extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                         ),
                         onPressed: onOk ?? () => Navigator.pop(context),
-                        child: const Text('OK'),
+                        child: Text(showContinueButton ? 'Continuar' : 'OK'),
                       ),
                     ],
                   ),

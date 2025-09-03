@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:biodetect/views/legal/terminos_condiciones.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class Registro extends StatefulWidget {
   const Registro({super.key});
@@ -56,19 +57,27 @@ class _RegistroState extends State<Registro> {
       });
       return;
     }
+
     setState(() {
       _loading = true;
       _error = null;
     });
+
     try {
-      // Crear usuario en Firebase Auth
+      // Crear cuenta
       final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      
       final user = credential.user;
       if (user != null) {
-        // Guardar datos en Firestore
+        // Actualizar displayName
+        await user.updateDisplayName(_nombreController.text.trim());
+        
+        await user.sendEmailVerification();
+        
+        // Crear documento del usuario en Firestore
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'uid': user.uid,
           'email': user.email,
@@ -78,13 +87,42 @@ class _RegistroState extends State<Registro> {
           'loginAt': FieldValue.serverTimestamp(),
           'badges': [],
         });
+
+        // Crear documento user_activity con estructura completa
+        await _createUserActivityDocument(user.uid);
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        
+        await FirebaseAuth.instance.signOut();
+
         if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('¡Cuenta creada! Verifica tu correo antes de iniciar sesión.'),
+              backgroundColor: AppColors.buttonGreen2,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          
           Navigator.pop(context);
         }
       }
     } on FirebaseAuthException catch (e) {
       setState(() {
-        _error = e.message ?? 'Error al registrar usuario.';
+        switch (e.code) {
+          case 'email-already-in-use':
+            _error = 'Ya existe una cuenta con este correo.';
+            break;
+          case 'invalid-email':
+            _error = 'El correo no es válido.';
+            break;
+          case 'weak-password':
+            _error = 'La contraseña es demasiado débil.';
+            break;
+          default:
+            _error = 'No se pudo crear la cuenta. Verifica tus datos e inténtalo de nuevo.';
+        }
       });
     } catch (e) {
       setState(() {
@@ -95,6 +133,44 @@ class _RegistroState extends State<Registro> {
         _loading = false;
       });
     }
+  }
+
+  // Crear documento user_activity con estructura completa según especificaciones
+  Future<void> _createUserActivityDocument(String userId) async {
+    final activityDoc = FirebaseFirestore.instance.collection('user_activity').doc(userId);
+    
+    await activityDoc.set({
+      'userId': userId,
+      'fieldNotesCreated': 0,
+      'photosUploaded': 0,
+      'lastActivity': FieldValue.serverTimestamp(),
+      'speciesIdentified': {
+        'byClass': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byClassTaxonomy': {
+          'Arachnida': 0,
+          'Insecta': 0,
+        },
+        'byTaxon': {
+          // Arachnida (5 órdenes)
+          'Acari': 0,
+          'Amblypygi': 0,
+          'Araneae': 0,
+          'Scorpions': 0,
+          'Solifugae': 0,
+          // Insecta (5 órdenes)
+          'Dermaptera': 0,
+          'Lepidoptera': 0,
+          'Mantodea': 0,
+          'Orthoptera': 0,
+          'Thysanoptera': 0,
+        },
+        'totalByClass': 0,
+        'totalByTaxon': 0,
+      },
+    });
   }
 
   @override
@@ -146,7 +222,7 @@ class _RegistroState extends State<Registro> {
                         style: const TextStyle(color: AppColors.textWhite),
                       ),
                       const SizedBox(height: 16),
-                        // Campo: Correo
+                      // Campo: Correo
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
@@ -180,7 +256,7 @@ class _RegistroState extends State<Registro> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                              color: AppColors.textWhite.withOpacity(0.7),
+                              color: AppColors.textWhite.withValues(alpha: 0.7),
                             ),
                             onPressed: () {
                               setState(() {
@@ -227,7 +303,7 @@ class _RegistroState extends State<Registro> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscureConfirm ? Icons.visibility_off : Icons.visibility,
-                              color: AppColors.textWhite.withOpacity(0.7),
+                              color: AppColors.textWhite.withValues(alpha: 0.7),
                             ),
                             onPressed: () {
                               setState(() {

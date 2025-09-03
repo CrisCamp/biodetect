@@ -1,16 +1,117 @@
+import 'dart:io';
+import 'dart:async';
 import 'package:biodetect/views/notes/mis_bitacoras.dart';
 import 'package:biodetect/views/user/editar_perfil.dart';
-import 'package:biodetect/views/session/inicio_sesion.dart';
+import 'package:biodetect/views/badges/galeria_insignias.dart';
 import 'package:flutter/material.dart';
 import 'package:biodetect/themes.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  late Future<Map<String, dynamic>> _userDataFuture;
+  bool _hasInternet = true;
+  Timer? _internetTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkInternet();
+    _userDataFuture = _loadUserData();
+    _internetTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      _checkInternet();
+    });
+  }
+
+  @override
+  void dispose() {
+    _internetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkInternet() async {
+    try {
+      final result = await InternetAddress.lookup('example.com');
+      if (mounted) {
+        setState(() {
+          _hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _hasInternet = false;
+        });
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw Exception('No hay usuario autenticado');
+
+    DocumentSnapshot userDoc;
+    DocumentSnapshot activityDoc;
+
+    try {
+      userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
+      activityDoc = await FirebaseFirestore.instance
+          .collection('user_activity')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.serverAndCache));
+    } catch (e) {
+      userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.cache));
+      activityDoc = await FirebaseFirestore.instance
+          .collection('user_activity')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.cache));
+    }
+
+    final Map<String, dynamic> userData = userDoc.data() is Map<String, dynamic>
+        ? userDoc.data() as Map<String, dynamic>
+        : <String, dynamic>{};
+    final Map<String, dynamic> activityData = activityDoc.data() is Map<String, dynamic>
+        ? activityDoc.data() as Map<String, dynamic>
+        : <String, dynamic>{};
+
+    List<Map<String, dynamic>> badgesData = [];
+    if (userData['badges'] != null && userData['badges'] is List) {
+      final badgeIds = List<String>.from(userData['badges']);
+      if (badgeIds.isNotEmpty) {
+        final badgesSnap = await FirebaseFirestore.instance
+            .collection('badges')
+            .where(FieldPath.documentId, whereIn: badgeIds)
+            .get();
+        badgesData = badgesSnap.docs
+            .map((doc) => Map<String, dynamic>.from(doc.data() as Map))
+            .toList();
+      }
+    }
+
+    return {
+      'user': userData,
+      'activity': activityData,
+      'badges': badgesData,
+    };
+  }
+
   Future<void> _cerrarSesion(BuildContext context) async {
-    // Mostrar diálogo de confirmación
     final bool? confirmar = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) {
@@ -44,46 +145,16 @@ class ProfileScreen extends StatelessWidget {
       },
     );
 
-    // Si el usuario confirmó, cerrar sesión
     if (confirmar == true && context.mounted) {
       try {
-        // Mostrar indicador de carga
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => const Center(
-            child: CircularProgressIndicator(color: AppColors.mintGreen),
-          ),
-        );
-
-        // Limpiar preferencias de "recordar sesión" - NUEVO
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('auto_login', false);
-        // Mantener email guardado si el usuario lo tenía marcado anteriormente
-        // await prefs.remove('saved_email'); // Opcional: descomentar para limpiar email también
-
-        // Cerrar sesión en Firebase
+        await prefs.clear();
+        try {
+          await GoogleSignIn().signOut();
+        } catch (e) {
+        }
         await FirebaseAuth.instance.signOut();
-
-        // Cerrar diálogo de carga
-        if (context.mounted) {
-          Navigator.of(context).pop();
-        }
-
-        // Navegar a la pantalla de inicio de sesión
-        if (context.mounted) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const InicioSesion()),
-            (route) => false, // Elimina todas las pantallas anteriores
-          );
-        }
       } catch (e) {
-        // Cerrar diálogo de carga si está abierto
-        if (context.mounted) {
-          Navigator.of(context).pop();
-        }
-
-        // Mostrar error
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -98,14 +169,6 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Valores por defecto o mensaje si no hay datos
-    final String nombre = "Nombre no disponible";
-    final String correo = "Correo no disponible";
-    final bool verificado = false;
-    final int identificaciones = 0;
-    final int bitacoras = 0;
-    final int insignias = 0;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -115,137 +178,240 @@ class ProfileScreen extends StatelessWidget {
         backgroundColor: AppColors.backgroundNavBarsLigth,
         iconTheme: const IconThemeData(color: AppColors.textWhite),
         elevation: 0,
-        centerTitle: false, // Título alineado a la izquierda
+        centerTitle: false,
       ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: AppColors.backgroundLightGradient,
         ),
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
-          children: [
-            const SizedBox(height: 32),
-            // Sección 1: Header
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Foto de perfil
-                Card(
-                  shape: const CircleBorder(),
-                  color: Colors.transparent,
-                  elevation: 4,
-                  child: CircleAvatar(
-                    radius: 75,
-                    backgroundColor: AppColors.forestGreen,
-                    child: CircleAvatar(
-                      radius: 72,
-                      backgroundImage: const AssetImage('assets/ic_default_profile.png'),
-                      backgroundColor: AppColors.white,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // Nombre
-                Text(
-                  nombre.isNotEmpty ? nombre : "Nombre no disponible",
-                  style: const TextStyle(
-                    color: AppColors.textWhite,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                // Correo + verificación
-                Row(
+        child: FutureBuilder<Map<String, dynamic>>(
+          future: _userDataFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(color: AppColors.mintGreen));
+            }
+            if (snapshot.hasError) {
+              return Center(
+                child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      correo.isNotEmpty ? correo : "Correo no disponible",
-                      style: const TextStyle(
-                        color: AppColors.textWhite,
-                        fontSize: 14,
-                      ),
+                      'Error al cargar perfil: ${snapshot.error}',
+                      style: const TextStyle(color: AppColors.warning),
                     ),
-                    if (verificado)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 8),
-                        child: Icon(Icons.verified, color: AppColors.aquaBlue, size: 20),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          _userDataFuture = _loadUserData();
+                        });
+                      },
+                      child: const Text('Reintentar'),
+                    ),
+                    const SizedBox(height: 8),
+                    if (snapshot.error.toString().contains('unavailable'))
+                      const Text(
+                        'El servicio de Firestore está temporalmente fuera de línea. Intenta de nuevo más tarde.',
+                        style: TextStyle(color: AppColors.warning, fontSize: 13),
+                        textAlign: TextAlign.center,
                       ),
                   ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 32),
-            // Sección 2: Estadísticas
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  _EstadisticaCard(
-                    icon: Icons.bug_report,
-                    label: "Identificaciones",
-                    value: identificaciones,
-                    iconColor: AppColors.textBlueNormal,
-                  ),
-                  _EstadisticaCard(
-                    icon: Icons.menu_book,
-                    label: "Bitácoras",
-                    value: bitacoras,
-                    iconColor: AppColors.textBlueNormal,
-                  ),
-                  _EstadisticaCard(
-                    icon: Icons.emoji_events,
-                    label: "Insignias",
-                    value: insignias,
-                    iconColor: AppColors.textBlueNormal,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 32),
-            // Sección 3: Acciones
-            Column(
+              );
+            }
+
+            final user = snapshot.data!['user'] ?? {};
+            final activity = snapshot.data!['activity'] ?? {};
+            final badges = snapshot.data!['badges'] ?? [];
+
+            final String nombre = user['fullname'] ?? 'Nombre no disponible';
+            final String correo = user['email'] ?? 'Correo no disponible';
+            final String? foto = user['profilePicture'];
+            final bool verificado = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
+            final int identificaciones = activity['photosUploaded'] ?? 0;
+            final int bitacoras = activity['fieldNotesCreated'] ?? 0;
+            final int insignias = (user['badges'] as List?)?.length ?? 0;
+
+            return ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
               children: [
-                _AccionPerfilTile(
-                  icon: Icons.menu_book,
-                  iconColor: AppColors.textBlueNormal,
-                  label: "Mis Bitácoras",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const MisBitacorasScreen(),
+                const SizedBox(height: 32),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Card(
+                      shape: const CircleBorder(),
+                      color: Colors.transparent,
+                      elevation: 4,
+                      child: CircleAvatar(
+                        radius: 75,
+                        backgroundColor: AppColors.forestGreen,
+                        child: (foto != null && foto.isNotEmpty)
+                          ? ClipOval(
+                              child: CachedNetworkImage(
+                                imageUrl: foto,
+                                width: 150,
+                                height: 150,
+                                fit: BoxFit.cover,
+                                errorWidget: (context, url, error) =>
+                                  const Icon(Icons.person, size: 72, color: AppColors.slateGrey),
+                                placeholder: (context, url) =>
+                                  const CircularProgressIndicator(),
+                              ),
+                            )
+                          : const Icon(Icons.person, size: 72, color: AppColors.slateGrey),
                       ),
-                    );
-                  },
-                  trailing: Icons.arrow_forward_ios,
-                ),
-                _DividerPerfil(),
-                _AccionPerfilTile(
-                  icon: Icons.settings,
-                  iconColor: AppColors.textBlueNormal,
-                  label: "Editar Perfil",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const EditarPerfil(),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      nombre,
+                      style: const TextStyle(
+                        color: AppColors.textWhite,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
                       ),
-                    );
-                  },
-                  trailing: Icons.arrow_forward_ios,
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          correo,
+                          style: const TextStyle(
+                            color: AppColors.textWhite,
+                            fontSize: 14,
+                          ),
+                        ),
+                        if (verificado)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 8),
+                            child: Icon(Icons.verified, color: AppColors.aquaBlue, size: 20),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
-                _DividerPerfil(),
-                _AccionPerfilTile(
-                  icon: Icons.logout,
-                  iconColor: AppColors.warning, // Cambiar color a warning
-                  label: "Cerrar Sesión",
-                  onTap: () => _cerrarSesion(context), // Llamar a la función
-                  trailing: null,
+                const SizedBox(height: 32),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      _EstadisticaCard(
+                        icon: Icons.bug_report,
+                        label: "Identificaciones",
+                        value: identificaciones,
+                        iconColor: AppColors.textBlueNormal,
+                      ),
+                      _EstadisticaCard(
+                        icon: Icons.menu_book,
+                        label: "Bitácoras",
+                        value: bitacoras,
+                        iconColor: AppColors.textBlueNormal,
+                      ),
+                      _EstadisticaCard(
+                        icon: Icons.emoji_events,
+                        label: "Insignias",
+                        value: insignias,
+                        iconColor: AppColors.textBlueNormal,
+                        onTap: () async {
+                          final hadChanges = await Navigator.push<bool>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const GaleriaInsigniasScreen(),
+                            ),
+                          );
+                          
+                          // Si hubo cambios en las insignias, recargar los datos del perfil
+                          if (hadChanges == true) {
+                            setState(() {
+                              _userDataFuture = _loadUserData();
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
                 ),
+                const SizedBox(height: 32),
+                if (badges.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: SizedBox(
+                      height: 60,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: badges.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        itemBuilder: (context, i) {
+                          final badge = badges[i];
+                          return Tooltip(
+                            message: badge['name'] ?? '',
+                            child: CircleAvatar(
+                              backgroundColor: AppColors.slateGreen,
+                              radius: 28,
+                              backgroundImage: badge['iconUrl'] != null
+                                  ? NetworkImage(badge['iconUrl'])
+                                  : null,
+                              child: badge['iconUrl'] == null
+                                  ? const Icon(Icons.emoji_events, color: AppColors.textWhite)
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                if (badges.isNotEmpty) const SizedBox(height: 32),
+                Column(
+                  children: [
+                    _AccionPerfilTile(
+                      icon: Icons.menu_book,
+                      iconColor: AppColors.textBlueNormal,
+                      label: "Mis Bitácoras",
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const MisBitacorasScreen(),
+                          ),
+                        );
+                      },
+                      trailing: Icons.arrow_forward_ios,
+                    ),
+                    _DividerPerfil(),
+                    if (_hasInternet)
+                      _AccionPerfilTile(
+                        icon: Icons.settings,
+                        iconColor: AppColors.textBlueNormal,
+                        label: "Editar Perfil",
+                        onTap: () async {
+                          final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const EditarPerfil(),
+                            ),
+                          );
+                          if (result == true) {
+                            setState(() {
+                              _userDataFuture = _loadUserData();
+                            });
+                          }
+                        },
+                        trailing: Icons.arrow_forward_ios,
+                      ),
+                    if (_hasInternet) _DividerPerfil(),
+                    _AccionPerfilTile(
+                      icon: Icons.logout,
+                      iconColor: AppColors.warning,
+                      label: "Cerrar Sesión",
+                      onTap: () => _cerrarSesion(context),
+                      trailing: null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
               ],
-            ),
-            const SizedBox(height: 32),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -257,46 +423,51 @@ class _EstadisticaCard extends StatelessWidget {
   final String label;
   final int value;
   final Color iconColor;
+  final VoidCallback? onTap;
 
   const _EstadisticaCard({
     required this.icon,
     required this.label,
     required this.value,
     required this.iconColor,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Card(
-        color: AppColors.backgroundCard,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        margin: const EdgeInsets.symmetric(horizontal: 8),
-        child: SizedBox(
-          height: 120,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 40, color: iconColor),
-              const SizedBox(height: 8),
-              Text(
-                value.toString(),
-                style: const TextStyle(
-                  color: AppColors.textWhite,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Card(
+          color: AppColors.backgroundCard,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          margin: const EdgeInsets.symmetric(horizontal: 8),
+          child: SizedBox(
+            height: 120,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 40, color: iconColor),
+                const SizedBox(height: 8),
+                Text(
+                  value.toString(),
+                  style: const TextStyle(
+                    color: AppColors.textWhite,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppColors.textWhite,
-                  fontSize: 12,
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.textWhite,
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

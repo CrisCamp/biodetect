@@ -1,4 +1,5 @@
 import 'package:biodetect/themes.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class CambiarContrasenaScreen extends StatefulWidget {
@@ -18,6 +19,11 @@ class _CambiarContrasenaScreenState extends State<CambiarContrasenaScreen> {
   String? _error;
   int _passwordStrength = 0;
 
+  // Ojos para mostrar/ocultar contraseñas
+  bool _showCurrent = false;
+  bool _showNew = false;
+  bool _showConfirm = false;
+
   void _checkPasswordStrength(String value) {
     int strength = 0;
     if (value.length >= 8) strength++;
@@ -30,18 +36,66 @@ class _CambiarContrasenaScreenState extends State<CambiarContrasenaScreen> {
     });
   }
 
-  void _onGuardar() {
+  Future<void> _onGuardar() async {
+    if (!_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
       _error = null;
     });
-    // Simulación de proceso
-    Future.delayed(const Duration(seconds: 2), () {
+
+    final user = FirebaseAuth.instance.currentUser;
+    final currentPassword = _currentController.text.trim();
+    final newPassword = _newController.text.trim();
+    final confirmPassword = _confirmController.text.trim();
+
+    if (newPassword != confirmPassword) {
       setState(() {
         _loading = false;
-        // Aquí iría la lógica real de cambio de contraseña
+        _error = 'Las contraseñas nuevas no coinciden.';
       });
-    });
+      return;
+    }
+
+    try {
+      // Reautenticación
+      final cred = EmailAuthProvider.credential(
+        email: user!.email!,
+        password: currentPassword,
+      );
+      await user.reauthenticateWithCredential(cred);
+
+      // Cambiar contraseña
+      await user.updatePassword(newPassword);
+
+      setState(() {
+        _loading = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Contraseña actualizada correctamente')),
+        );
+        Navigator.pop(context);
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _loading = false;
+        if (e.code == 'wrong-password') {
+          _error = 'La contraseña actual es incorrecta.';
+        } else if (e.code == 'weak-password') {
+          _error = 'La nueva contraseña es demasiado débil.';
+        } else if (e.code == 'requires-recent-login') {
+          _error = 'Por seguridad, vuelve a iniciar sesión e inténtalo de nuevo.';
+        } else {
+          _error = 'Error: ${e.message}';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Error inesperado: $e';
+      });
+    }
   }
 
   @override
@@ -59,165 +113,201 @@ class _CambiarContrasenaScreenState extends State<CambiarContrasenaScreen> {
         decoration: const BoxDecoration(
           gradient: AppColors.backgroundLightGradient,
         ),
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
         child: Stack(
           children: [
             Center(
               child: SingleChildScrollView(
-                child: Card(
-                  color: AppColors.backgroundCard,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Título
-                          const Text(
-                            'Cambiar Contraseña',
-                            style: TextStyle(
-                              color: AppColors.textWhite,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Título
+                      const Text(
+                        'Cambiar Contraseña',
+                        style: TextStyle(
+                          color: AppColors.textBlack,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 32),
+                      // Campo: Contraseña actual
+                      TextFormField(
+                        controller: _currentController,
+                        obscureText: !_showCurrent,
+                        decoration: InputDecoration(
+                          hintText: 'Contraseña actual',
+                          filled: true,
+                          fillColor: AppColors.paleGreen,
+                          hintStyle: const TextStyle(color: AppColors.textBlack),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _showCurrent ? Icons.visibility : Icons.visibility_off,
+                              color: AppColors.slateGrey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _showCurrent = !_showCurrent;
+                              });
+                            },
+                          ),
+                        ),
+                        style: const TextStyle(color: AppColors.textBlack),
+                      ),
+                      const SizedBox(height: 20),
+                      // Campo: Nueva contraseña
+                      TextFormField(
+                        controller: _newController,
+                        obscureText: !_showNew,
+                        onChanged: _checkPasswordStrength,
+                        decoration: InputDecoration(
+                          hintText: 'Nueva contraseña',
+                          filled: true,
+                          fillColor: AppColors.paleGreen,
+                          hintStyle: const TextStyle(color: AppColors.textBlack),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _showNew ? Icons.visibility : Icons.visibility_off,
+                              color: AppColors.slateGrey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _showNew = !_showNew;
+                              });
+                            },
+                          ),
+                        ),
+                        style: const TextStyle(color: AppColors.textBlack),
+                      ),
+                      // Barra de fortaleza de contraseña
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Row(
+                          children: List.generate(5, (i) {
+                            return Expanded(
+                              child: Container(
+                                height: 4,
+                                margin: EdgeInsets.symmetric(horizontal: i == 1 || i == 3 ? 2 : 0),
+                                decoration: BoxDecoration(
+                                  color: i < _passwordStrength
+                                      ? AppColors.mintGreen
+                                      : AppColors.slateGrey,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                      // Campo: Confirmar nueva contraseña
+                      TextFormField(
+                        controller: _confirmController,
+                        obscureText: !_showConfirm,
+                        decoration: InputDecoration(
+                          hintText: 'Confirmar nueva contraseña',
+                          filled: true,
+                          fillColor: AppColors.paleGreen,
+                          hintStyle: const TextStyle(color: AppColors.textBlack),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _showConfirm ? Icons.visibility : Icons.visibility_off,
+                              color: AppColors.slateGrey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _showConfirm = !_showConfirm;
+                              });
+                            },
+                          ),
+                        ),
+                        style: const TextStyle(color: AppColors.textBlack),
+                      ),
+                      const SizedBox(height: 28),
+                      // Mensaje de error
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            _error!,
+                            style: const TextStyle(
+                              color: AppColors.warning,
+                              fontSize: 13,
                             ),
                             textAlign: TextAlign.center,
                           ),
-                          const SizedBox(height: 24),
-                          // Campo: Contraseña actual
-                          TextFormField(
-                            controller: _currentController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              hintText: 'Contraseña actual',
-                              filled: true,
-                              fillColor: AppColors.paleGreen,
-                              hintStyle: const TextStyle(color: AppColors.textBlack),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            style: const TextStyle(color: AppColors.textWhite),
-                          ),
-                          const SizedBox(height: 16),
-                          // Campo: Nueva contraseña
-                          TextFormField(
-                            controller: _newController,
-                            obscureText: true,
-                            onChanged: _checkPasswordStrength,
-                            decoration: InputDecoration(
-                              hintText: 'Nueva contraseña',
-                              filled: true,
-                              fillColor: AppColors.paleGreen,
-                              hintStyle: const TextStyle(color: AppColors.textBlack),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            style: const TextStyle(color: AppColors.textWhite),
-                          ),
-                          // Barra de fortaleza de contraseña
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Row(
-                              children: List.generate(5, (i) {
-                                return Expanded(
-                                  child: Container(
-                                    height: 4,
-                                    margin: EdgeInsets.symmetric(horizontal: i == 1 || i == 3 ? 2 : 0),
-                                    decoration: BoxDecoration(
-                                      color: i < _passwordStrength
-                                          ? AppColors.mintGreen
-                                          : AppColors.slateGrey,
-                                      borderRadius: BorderRadius.circular(2),
-                                    ),
-                                  ),
-                                );
-                              }),
-                            ),
-                          ),
-                          // Campo: Confirmar nueva contraseña
-                          TextFormField(
-                            controller: _confirmController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              hintText: 'Confirmar nueva contraseña',
-                              filled: true,
-                              fillColor: AppColors.paleGreen,
-                              hintStyle: const TextStyle(color: AppColors.textBlack),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            style: const TextStyle(color: AppColors.textWhite),
-                          ),
-                          const SizedBox(height: 24),
-                          // Mensaje de error
-                          if (_error != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: Text(
-                                _error!,
-                                style: const TextStyle(
-                                  color: AppColors.warning,
-                                  fontSize: 12,
+                        ),
+                      // Botones de acción
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.buttonBrown2,
+                                foregroundColor: AppColors.textBlack,
+                                minimumSize: const Size(0, 50),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
+                                elevation: 2,
+                              ),
+                              onPressed: _loading
+                                  ? null
+                                  : () {
+                                Navigator.pop(context);
+                              },
+                              child: const Text(
+                                'Cancelar',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                             ),
-                          // Botones de acción
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.buttonBrown2,
-                                    foregroundColor: AppColors.textBlack,
-                                    minimumSize: const Size(0, 48),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                  onPressed: _loading
-                                      ? null
-                                      : () {
-                                    Navigator.pop(context);
-                                  },
-                                  child: const Text(
-                                    'Cancelar',
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                  ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.buttonGreen2,
+                                foregroundColor: AppColors.textBlack,
+                                minimumSize: const Size(0, 50),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
+                                elevation: 2,
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.buttonGreen2,
-                                    foregroundColor: AppColors.textBlack,
-                                    minimumSize: const Size(0, 48),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
+                              onPressed: _loading ? null : _onGuardar,
+                              child: _loading
+                                  ? const SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Text(
+                                      'Guardar cambios',
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                     ),
-                                  ),
-                                  onPressed: _loading ? null : _onGuardar,
-                                  child: const Text(
-                                    'Guardar cambios',
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
+                    ],
                   ),
                 ),
               ),
