@@ -1,6 +1,11 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/views/registers/lista_registros.dart';
+import 'package:biodetect/views/registers/captura_foto.dart';
+import 'package:biodetect/views/registers/fotos_pendientes.dart';
+import 'package:biodetect/views/map/mapa.dart';
+import 'package:biodetect/services/pending_photos_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -17,12 +22,22 @@ class _AlbumFotosState extends State<AlbumFotos> {
   Map<String, List<Map<String, dynamic>>> _photoGroups = {};
   bool _isLoading = true;
   bool _hasInternet = true;
+  Timer? _connectionCheckTimer; // Timer para verificación de conexión automática
+  int _pendingCount = 0; // Contador de fotos pendientes
 
   @override
   void initState() {
     super.initState();
     _loadPhotos();
+    _loadPendingCount();
     _checkInternetConnection();
+    _startPeriodicConnectionCheck(); // Iniciar verificación automática
+  }
+
+  @override
+  void dispose() {
+    _connectionCheckTimer?.cancel(); // Limpiar Timer al destruir el widget
+    super.dispose();
   }
 
   Future<void> _checkInternetConnection() async {
@@ -34,6 +49,42 @@ class _AlbumFotosState extends State<AlbumFotos> {
     } catch (_) {
       setState(() {
         _hasInternet = false;
+      });
+    }
+  }
+
+  // Verificar si el error es relacionado con la conexión
+  bool _isConnectionError(dynamic error) {
+    final errorString = error.toString().toLowerCase();
+    return errorString.contains('network') || 
+           errorString.contains('connection') || 
+           errorString.contains('internet') ||
+           errorString.contains('timeout') ||
+           errorString.contains('failed host lookup') ||
+           errorString.contains('socketexception') ||
+           errorString.contains('httpexception') ||
+           errorString.contains('clientexception') ||
+           errorString.contains('no address associated with hostname') ||
+           errorString.contains('unreachable');
+  }
+
+  // Verificación periódica de conexión (cada 10 segundos)
+  void _startPeriodicConnectionCheck() {
+    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (mounted) {
+        _checkInternetConnection();
+      } else {
+        timer.cancel(); // Cancelar si el widget ya no está montado
+      }
+    });
+  }
+
+  Future<void> _loadPendingCount() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final count = await PendingPhotosService.getPendingCount(user.uid);
+      setState(() {
+        _pendingCount = count;
       });
     }
   }
@@ -78,8 +129,23 @@ class _AlbumFotosState extends State<AlbumFotos> {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Mostrando datos en caché si están disponibles.';
+        } else {
+          errorMessage = 'Error al cargar fotos: $e';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al cargar fotos: $e')),
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: _isConnectionError(e) ? AppColors.warning : AppColors.warningDark,
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -186,7 +252,7 @@ class _AlbumFotosState extends State<AlbumFotos> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _hasInternet ? 'Online' : 'Cache',
+                    _hasInternet ? 'Online' : 'Offline',
                     style: TextStyle(
                       color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
                       fontSize: 10,
@@ -218,55 +284,124 @@ class _AlbumFotosState extends State<AlbumFotos> {
         child: SafeArea(
           child: Column(
             children: [
-              // Header con indicador de conexión
               Padding(
                 padding: const EdgeInsets.all(16),
-                child: Row(
+                child: Column(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new),
-                      color: AppColors.white,
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Álbum de Fotografías',
-                            style: TextStyle(
-                              color: AppColors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          // Indicador de conexión
-                          Container(
-                            margin: const EdgeInsets.only(top: 4),
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              _hasInternet ? 'Conectado' : 'Modo Cache',
-                              style: const TextStyle(
-                                color: AppColors.textBlack,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
+                    // Título principal
+                    const Text(
+                      'Mis hallazgos',
+                      style: TextStyle(
+                        color: AppColors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
                       ),
+                      textAlign: TextAlign.center,
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      color: AppColors.white,
-                      onPressed: _isLoading ? null : () {
-                        _checkInternetConnection();
-                        _loadPhotos();
-                      },
+                    const SizedBox(height: 16),
+                    
+                    // Indicador de conexión y accesos rápidos
+                    Row(
+                      children: [
+                        // Indicador de conexión
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _hasInternet ? AppColors.buttonGreen2 : AppColors.warning,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _hasInternet ? Icons.wifi : Icons.wifi_off,
+                                size: 16,
+                                color: AppColors.textBlack,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _hasInternet ? 'Conectado' : 'Sin conexión',
+                                style: const TextStyle(
+                                  color: AppColors.textBlack,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Spacer(),
+                        
+                        // Botones de acceso rápido
+                        IconButton(
+                          icon: Stack(
+                            children: [
+                              const Icon(Icons.schedule_outlined),
+                              if (_pendingCount > 0)
+                                Positioned(
+                                  right: 0,
+                                  top: 0,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.warning,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color.fromARGB(255, 255, 107, 107), width: 1),
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 14,
+                                      minHeight: 12,
+                                    ),
+                                    child: Text(
+                                      _pendingCount > 9 ? '9+' : _pendingCount.toString(),
+                                      style: const TextStyle(
+                                        color: Color.fromARGB(255, 255, 255, 255),
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          color: AppColors.white,
+                          tooltip: 'Fotos Pendientes',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const FotosPendientes()),
+                            ).then((_) => _loadPendingCount());
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.camera_alt_outlined),
+                          color: AppColors.white,
+                          tooltip: 'Capturar Foto',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const CapturaFoto()),
+                            ).then((_) {
+                              _loadPhotos();
+                              _loadPendingCount();
+                            });
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.location_on_outlined),
+                          color: AppColors.white,
+                          tooltip: 'Ver mapa',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const MapaIterativoScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -280,46 +415,104 @@ class _AlbumFotosState extends State<AlbumFotos> {
                         ),
                       )
                     : _photoGroups.isEmpty
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.photo_library_outlined,
-                                  size: 80,
-                                  color: AppColors.textPaleGreen,
-                                ),
-                                SizedBox(height: 16),
-                                Text(
-                                  'No tienes fotografías guardadas',
-                                  style: TextStyle(
-                                    color: AppColors.textPaleGreen,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(24),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.buttonGreen2.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Icon(
+                                      Icons.camera_alt_outlined,
+                                      size: 80,
+                                      color: AppColors.buttonGreen2,
+                                    ),
                                   ),
-                                ),
-                                SizedBox(height: 8),
-                                Text(
-                                  'Captura tu primera fotografía para\ncomenzar tu colección',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: AppColors.textPaleGreen,
-                                    fontSize: 14,
+                                  const SizedBox(height: 24),
+                                  const Text(
+                                    '¡Bienvenido a BioDetect!',
+                                    style: TextStyle(
+                                      color: AppColors.textWhite,
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    textAlign: TextAlign.center,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'Comienza tu aventura capturando tu primera fotografía de un artrópodo',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppColors.textPaleGreen,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.backgroundCard.withOpacity(0.5),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: const Column(
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(Icons.camera_alt, color: AppColors.buttonGreen2, size: 20),
+                                            SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Toca el botón "Capturar" para empezar',
+                                                style: TextStyle(color: AppColors.textWhite, fontSize: 14),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.psychology, color: AppColors.buttonBlue2, size: 20),
+                                            SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Nuestra IA identificará automáticamente la clase y el orden taxonómico',
+                                                style: TextStyle(color: AppColors.textWhite, fontSize: 14),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.collections, color: AppColors.buttonBrown1, size: 20),
+                                            SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Construye tu colección personal de descubrimientos',
+                                                style: TextStyle(color: AppColors.textWhite, fontSize: 14),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           )
-                        : RefreshIndicator(
-                            onRefresh: _loadPhotos,
-                            child: ListView.builder(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              itemCount: _photoGroups.length,
-                              itemBuilder: (context, index) {
-                                final entry = _photoGroups.entries.toList()[index];
-                                return _buildPhotoTile(entry.key, entry.value);
-                              },
-                            ),
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemCount: _photoGroups.length,
+                            itemBuilder: (context, index) {
+                              final entry = _photoGroups.entries.toList()[index];
+                              return _buildPhotoTile(entry.key, entry.value);
+                            },
                           ),
               ),
             ],

@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:biodetect/themes.dart';
 import 'package:biodetect/services/bitacora_service.dart';
 import 'package:biodetect/views/notes/detalle_bitacora_screen.dart';
+import 'package:biodetect/views/notes/crear_editar_bitacora_screen.dart';
+import 'package:biodetect/views/notes/mis_bitacoras.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -17,6 +20,7 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
   List<Map<String, dynamic>> _filteredBitacoras = [];
   bool _isLoading = true;
   bool _hasInternet = true;
+  Timer? _connectionCheckTimer; // Timer para verificación de conexión automática
   String _searchText = '';
   String _ordenActual = 'fecha'; // fecha, alfabetico
 
@@ -25,6 +29,13 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
     super.initState();
     _loadBitacoras();
     _checkInternetConnection();
+    _startPeriodicConnectionCheck(); // Iniciar verificación de conexión automática
+  }
+
+  @override
+  void dispose() {
+    _connectionCheckTimer?.cancel(); // Cancelar timer al destruir widget
+    super.dispose();
   }
 
   Future<void> _checkInternetConnection() async {
@@ -38,6 +49,33 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
         _hasInternet = false;
       });
     }
+  }
+
+  // Iniciar verificación automática cada 10 segundos
+  void _startPeriodicConnectionCheck() {
+    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _checkInternetConnection();
+    });
+  }
+
+  // Detectar si un error es de conectividad
+  bool _isConnectionError(dynamic error) {
+    if (error == null) return false;
+    
+    final errorString = error.toString().toLowerCase();
+    return errorString.contains('network') ||
+           errorString.contains('connection') ||
+           errorString.contains('timeout') ||
+           errorString.contains('unreachable') ||
+           errorString.contains('failed host lookup') ||
+           errorString.contains('no address associated') ||
+           errorString.contains('socketexception');
+  }
+
+  // Método para reintentar carga con verificación de conexión
+  Future<void> _retryLoad() async {
+    await _checkInternetConnection();
+    await _loadBitacoras();
   }
 
   Future<void> _loadBitacoras() async {
@@ -55,10 +93,22 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet y vuelve a intentar.';
+        } else {
+          errorMessage = 'Error al cargar bitácoras: $e';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al cargar bitácoras: $e'),
-            backgroundColor: AppColors.warning,
+            content: Text(errorMessage),
+            backgroundColor: _isConnectionError(e) ? AppColors.warning : AppColors.warningDark,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -110,17 +160,6 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
     });
   }
 
-  String _formatDate(dynamic createdAt) {
-    if (createdAt == null) return 'Sin fecha';
-    
-    try {
-      final date = createdAt is DateTime ? createdAt : createdAt.toDate();
-      return DateFormat('dd/MM/yyyy').format(date);
-    } catch (e) {
-      return 'Sin fecha';
-    }
-  }
-
   Future<void> _verBitacora(Map<String, dynamic> bitacora) async {
     Navigator.push(
       context,
@@ -148,16 +187,11 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                 child: Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new),
-                      color: AppColors.textWhite,
-                      onPressed: () => Navigator.pop(context),
-                    ),
                     Expanded(
                       child: Column(
                         children: [
                           const Text(
-                            'Explorar bitácoras públicas',
+                            'Bitácoras públicas',
                             style: TextStyle(
                               color: AppColors.textWhite,
                               fontSize: 20,
@@ -184,13 +218,43 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                         ],
                       ),
                     ),
+                    // Icono para ver mis bitácoras
+                    IconButton(
+                      icon: const Icon(Icons.library_books_outlined),
+                      color: AppColors.textWhite,
+                      tooltip: 'Mis bitácoras',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const MisBitacorasScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    // Icono para crear nueva bitácora
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      color: AppColors.textWhite,
+                      tooltip: 'Crear bitácora',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const CrearEditarBitacoraScreen(),
+                          ),
+                        ).then((_) {
+                          // Recargar bitácoras después de crear/editar
+                          _retryLoad();
+                        });
+                      },
+                    ),
+                    // Icono para refrescar
                     IconButton(
                       icon: const Icon(Icons.refresh),
                       color: AppColors.textWhite,
-                      onPressed: _isLoading ? null : () {
-                        _checkInternetConnection();
-                        _loadBitacoras();
-                      },
+                      tooltip: 'Refrescar',
+                      onPressed: _isLoading ? null : () => _retryLoad(),
                     ),
                   ],
                 ),
@@ -230,7 +294,7 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                           ? AppColors.buttonGreen2 
                           : AppColors.backgroundCard,
                       selectedColor: AppColors.buttonGreen2,
-                      shape: StadiumBorder(
+                      shape: const StadiumBorder(
                         side: BorderSide(color: AppColors.brownDark3, width: 1),
                       ),
                       labelStyle: TextStyle(
@@ -251,7 +315,7 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                           ? AppColors.buttonGreen2 
                           : AppColors.backgroundCard,
                       selectedColor: AppColors.buttonGreen2,
-                      shape: StadiumBorder(
+                      shape: const StadiumBorder(
                         side: BorderSide(color: AppColors.brownDark3, width: 1),
                       ),
                       labelStyle: TextStyle(
@@ -281,15 +345,19 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
-                                  _searchText.isNotEmpty ? Icons.search_off : Icons.public_off,
+                                  _hasInternet 
+                                      ? (_searchText.isNotEmpty ? Icons.search_off : Icons.public_off)
+                                      : Icons.wifi_off,
                                   size: 80,
                                   color: AppColors.textPaleGreen,
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
-                                  _searchText.isNotEmpty 
-                                      ? 'No se encontraron bitácoras'
-                                      : 'No hay bitácoras públicas disponibles',
+                                  _hasInternet 
+                                      ? (_searchText.isNotEmpty 
+                                          ? 'No se encontraron bitácoras'
+                                          : 'No hay bitácoras públicas disponibles')
+                                      : 'Sin conexión a internet',
                                   style: const TextStyle(
                                     color: AppColors.textPaleGreen,
                                     fontSize: 18,
@@ -298,15 +366,30 @@ class _ExplorarBitacorasPublicasScreenState extends State<ExplorarBitacorasPubli
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  _searchText.isNotEmpty 
-                                      ? 'Intenta con otros términos de búsqueda'
-                                      : 'Los usuarios aún no han compartido bitácoras públicas',
+                                  _hasInternet 
+                                      ? (_searchText.isNotEmpty 
+                                          ? 'Intenta con otros términos de búsqueda'
+                                          : 'Los usuarios aún no han compartido bitácoras públicas')
+                                      : 'Verifica tu conexión y vuelve a intentar',
                                   style: const TextStyle(
                                     color: AppColors.textPaleGreen,
                                     fontSize: 14,
                                   ),
                                   textAlign: TextAlign.center,
                                 ),
+                                const SizedBox(height: 20),
+                                if (!_hasInternet)
+                                  ElevatedButton(
+                                    onPressed: () => _retryLoad(),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.buttonGreen2,
+                                      foregroundColor: AppColors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                    ),
+                                    child: const Text('Reintentar'),
+                                  ),
                               ],
                             ),
                           )
