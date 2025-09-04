@@ -90,6 +90,8 @@ class _InicioSesionState extends State<InicioSesion> {
 
   // Función para login con correo/contraseña (CORREGIDA)
   Future<void> _onLogin() async {
+    if (!mounted) return; // ← Agregar verificación inicial
+
     if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
       setState(() {
         _error = 'Por favor completa todos los campos.';
@@ -113,14 +115,14 @@ class _InicioSesionState extends State<InicioSesion> {
         if (!user.emailVerified) {
           // Reenviar correo de verificación
           await user.sendEmailVerification();
-          
+
           final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('auto_login', false);
-          
+
           setState(() {
             _error = 'Debes verificar tu correo antes de continuar. Te hemos reenviado el enlace de verificación.';
           });
-          
+
           await FirebaseAuth.instance.signOut();
           return;
         }
@@ -161,7 +163,7 @@ class _InicioSesionState extends State<InicioSesion> {
     } on FirebaseAuthException catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('auto_login', false);
-      
+
       setState(() {
         switch (e.code) {
           case 'user-not-found':
@@ -186,7 +188,7 @@ class _InicioSesionState extends State<InicioSesion> {
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('auto_login', false);
-      
+
       setState(() {
         _error = 'Error inesperado: $e';
       });
@@ -197,8 +199,10 @@ class _InicioSesionState extends State<InicioSesion> {
     }
   }
 
-  // Función para login con Google (CORREGIDA - Google no requiere verificación de email)
+  // Función para login con Google (CORREGIDA - API correcta)
   Future<void> _onGoogleSignIn() async {
+    if (!mounted) return;
+
     setState(() {
       _loading = true;
       _error = null;
@@ -206,18 +210,20 @@ class _InicioSesionState extends State<InicioSesion> {
 
     try {
       await GoogleSignIn().signOut();
-      
+
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
 
       if (googleUser == null) {
-        setState(() {
-          _loading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _loading = false;
+          });
+        }
         return;
       }
 
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-      
+
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
@@ -241,7 +247,7 @@ class _InicioSesionState extends State<InicioSesion> {
             'loginAt': FieldValue.serverTimestamp(),
             'badges': [],
           });
-          
+
           await _createUserActivityDocument(user.uid);
         } else {
           await userDoc.update({
@@ -260,43 +266,49 @@ class _InicioSesionState extends State<InicioSesion> {
     } on FirebaseAuthException catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('auto_login', false);
-      
-      setState(() {
-        switch (e.code) {
-          case 'account-exists-with-different-credential':
-            _error = 'Ya existe una cuenta con este correo usando otro método.';
-            break;
-          case 'invalid-credential':
-            _error = 'Las credenciales de Google son inválidas.';
-            break;
-          case 'operation-not-allowed':
-            _error = 'El login con Google no está habilitado.';
-            break;
-          case 'network-request-failed':
-            _error = 'Error de conexión. Verifica tu internet e intenta de nuevo.';
-            break;
-          default:
-            _error = e.message ?? 'Error al iniciar sesión con Google.';
-        }
-      });
+
+      if (mounted) {
+        setState(() {
+          switch (e.code) {
+            case 'account-exists-with-different-credential':
+              _error = 'Ya existe una cuenta con este correo usando otro método.';
+              break;
+            case 'invalid-credential':
+              _error = 'Las credenciales de Google son inválidas.';
+              break;
+            case 'operation-not-allowed':
+              _error = 'El login con Google no está habilitado.';
+              break;
+            case 'network-request-failed':
+              _error = 'Error de conexión. Verifica tu internet e intenta de nuevo.';
+              break;
+            default:
+              _error = e.message ?? 'Error al iniciar sesión con Google.';
+          }
+        });
+      }
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('auto_login', false);
-      
-      setState(() {
-        _error = 'Error inesperado: $e';
-      });
+
+      if (mounted) {
+        setState(() {
+          _error = 'Error inesperado: $e';
+        });
+      }
     } finally {
-      setState(() {
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
   // Crear documento user_activity para usuarios de Google también
   Future<void> _createUserActivityDocument(String userId) async {
     final activityDoc = FirebaseFirestore.instance.collection('user_activity').doc(userId);
-    
+
     await activityDoc.set({
       'userId': userId,
       'fieldNotesCreated': 0,
