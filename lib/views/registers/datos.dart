@@ -68,6 +68,9 @@ class _RegDatosState extends State<RegDatos> {
   int _detailsCharCount = 0;
   int _notesCharCount = 0;
   static const int _maxCharacters = 255;
+  
+  // Checkbox para proporcionar imagen para mejorar modelo (solo nuevos registros)
+  bool _allowImageForModel = true;
 
   // Expresiones regulares separadas para latitud y longitud
   final RegExp _latitudRegExp = RegExp(r'^-?([0-8]?[0-9](\.[0-9]+)?|90(\.0+)?)$');
@@ -347,6 +350,29 @@ class _RegDatosState extends State<RegDatos> {
   /// 
   /// RESULTADO: Si se pierde la conexión en cualquier punto crítico, todo el proceso
   /// se cancela para evitar registros incompletos o actividades de usuario desincronizadas.
+
+  /// Método para subir imagen al dataset (sin verificaciones exhaustivas)
+  Future<void> _subirImagenADataset(String userId, String photoId) async {
+    try {
+      // Normalizar nombres para las carpetas
+      final String classFolder = className.toLowerCase();
+      final String orderFolder = taxonOrder.toLowerCase();
+      
+      // Crear la ruta del dataset
+      final String datasetPath = 'dataset/$classFolder/$orderFolder/$photoId.jpg';
+      
+      // Referencia al archivo en el dataset
+      final ref = FirebaseStorage.instance.ref().child(datasetPath);
+      
+      // Subir la imagen al dataset
+      await ref.putFile(widget.imageFile!);
+      
+      print('✅ Imagen subida al dataset: $datasetPath');
+    } catch (e) {
+      // "Ni modo" - solo log del error, no interrumpir el flujo
+      print('⚠️ Error al subir imagen al dataset: $e');
+    }
+  }
 
   /// Método principal que implementa el patrón híbrido:
   /// - Batch para operaciones Firestore (atómicas)
@@ -870,11 +896,17 @@ class _RegDatosState extends State<RegDatos> {
         }
       } else {
         // Modo nuevo: usar patrón híbrido para crear registro
-        await _guardarRegistroAtomico(user.uid, null, null);
+        final String newPhotoId = await _guardarRegistroAtomico(user.uid, null, null);
         
         // NOTIFICAR AL PERFIL: Informar que se creó un nuevo registro
         ProfileNotifier().notifyRegistroCreado();
         print('🔔 Notificado al ProfileScreen: nuevo registro creado (Clase: $className, Orden: $taxonOrder)');
+        
+        // SUBIR AL DATASET: Si el usuario lo permitió, subir imagen al dataset
+        if (_allowImageForModel) {
+          print('🔄 Subiendo imagen al dataset...');
+          await _subirImagenADataset(user.uid, newPhotoId);
+        }
         
         if (mounted) {
           ScaffoldMessenger.of(context).clearSnackBars();
@@ -2066,7 +2098,60 @@ class _RegDatosState extends State<RegDatos> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 25),
+                                const SizedBox(height: 20),
+                                // Checkbox para mejorar modelo (solo nuevos registros)
+                                if (!_isEditing) ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.slateGreen.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: AppColors.slateGreen.withValues(alpha: 0.3),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Checkbox(
+                                          value: _allowImageForModel,
+                                          onChanged: _isProcessing || _isAnalyzing 
+                                              ? null 
+                                              : (bool? value) {
+                                                  setState(() {
+                                                    _allowImageForModel = value ?? true;
+                                                  });
+                                                },
+                                          activeColor: AppColors.buttonGreen2,
+                                          checkColor: AppColors.textBlack,
+                                          side: const BorderSide(
+                                            color: AppColors.textWhite,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: GestureDetector(
+                                            onTap: _isProcessing || _isAnalyzing 
+                                                ? null 
+                                                : () {
+                                                    setState(() {
+                                                      _allowImageForModel = !_allowImageForModel;
+                                                    });
+                                                  },
+                                            child: const Text(
+                                              'Permitir usar esta imagen para mejorar el modelo de IA',
+                                              style: TextStyle(
+                                                color: AppColors.textWhite,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
                                 // Botón guardar/actualizar
                                 Row(
                                   children: [
