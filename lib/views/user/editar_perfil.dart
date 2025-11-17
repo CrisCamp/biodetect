@@ -432,6 +432,27 @@ class _EditarPerfilState extends State<EditarPerfil> {
     }
   }
 
+  /// Verifica si el usuario SOLO tiene Google como proveedor (sin email/contraseña)
+  bool _isGoogleOnlyUser() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    
+    bool hasGoogle = false;
+    bool hasPassword = false;
+    
+    // Verificar todos los proveedores de autenticación del usuario
+    for (final providerData in user.providerData) {
+      if (providerData.providerId == 'google.com') {
+        hasGoogle = true;
+      } else if (providerData.providerId == 'password') {
+        hasPassword = true;
+      }
+    }
+    
+    // Solo ocultar el botón si ÚNICAMENTE tiene Google (sin email/contraseña)
+    return hasGoogle && !hasPassword;
+  }
+
   Future<void> _mostrarDialogoEliminarCuenta() async {
     // Verificación inicial de conectividad antes de navegar
     print('🔍 EditarPerfil: Verificando conexión para eliminar cuenta...');
@@ -625,23 +646,25 @@ class _EditarPerfilState extends State<EditarPerfil> {
                         ),
                         const SizedBox(height: 36),
                         
-                        Center(
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const CambiarContrasenaScreen()),
-                              );
-                            },
-                            child: const Text(
-                              'Cambiar contraseña',
-                              style: TextStyle(
-                                color: AppColors.textWhite,
-                                fontWeight: FontWeight.bold,
+                        // Solo mostrar el botón de cambiar contraseña si NO es un usuario exclusivamente de Google
+                        if (!_isGoogleOnlyUser())
+                          Center(
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => const CambiarContrasenaScreen()),
+                                );
+                              },
+                              child: const Text(
+                                'Cambiar contraseña',
+                                style: TextStyle(
+                                  color: AppColors.textWhite,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ),
