@@ -261,6 +261,9 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('remove_ads', true);
         
+        // Notificar al servicio de anuncios que el estado cambió
+        await BannerAdService.notifyAdsStateChanged();
+        
         // Recargar datos del perfil
         setState(() {
           _userDataFuture = _loadUserData();
