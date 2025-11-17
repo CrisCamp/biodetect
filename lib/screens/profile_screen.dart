@@ -11,6 +11,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -27,6 +28,14 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
   // Notificador para recargar perfil cuando se eliminen registros
   final ProfileNotifier _profileNotifier = ProfileNotifier();
 
+  // Variables para compras in-app
+  final InAppPurchase _inAppPurchase = InAppPurchase.instance;
+  late StreamSubscription<List<PurchaseDetails>> _subscription;
+  List<ProductDetails> _products = [];
+  bool _isAvailable = false;
+  bool _purchaseInProgress = false;
+  static const String _productId = 'remove_ads_banner_permanently';
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +48,9 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
     
     // Escuchar cambios en el ProfileNotifier para recargar datos
     _profileNotifier.shouldRefreshProfile.addListener(_onProfileChangeRequested);
+    
+    // Inicializar compras in-app
+    _initInAppPurchase();
   }
 
   @override
@@ -46,6 +58,7 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
     _internetTimer?.cancel();
     disposeBanner(); // Limpiar el banner ad
     _profileNotifier.shouldRefreshProfile.removeListener(_onProfileChangeRequested);
+    _subscription.cancel();
     super.dispose();
   }
 
@@ -166,6 +179,251 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
     }
   }
 
+  /// Inicializar el sistema de compras in-app
+  Future<void> _initInAppPurchase() async {
+    final bool available = await _inAppPurchase.isAvailable();
+    if (!available) {
+      setState(() {
+        _isAvailable = false;
+        _products = [];
+      });
+      return;
+    }
+
+    // Cargar productos disponibles
+    const Set<String> productIds = {_productId};
+    final ProductDetailsResponse response = await _inAppPurchase.queryProductDetails(productIds);
+    
+    if (response.notFoundIDs.isNotEmpty) {
+      print('🛒 Productos no encontrados: ${response.notFoundIDs}');
+    }
+
+    setState(() {
+      _isAvailable = available;
+      _products = response.productDetails;
+    });
+
+    // Escuchar cambios en las compras
+    _subscription = _inAppPurchase.purchaseStream.listen(
+      (List<PurchaseDetails> purchaseDetailsList) {
+        _listenToPurchaseUpdated(purchaseDetailsList);
+      },
+      onDone: () {
+        _subscription.cancel();
+      },
+      onError: (error) {
+        print('🛒 Error en el stream de compras: $error');
+      },
+    );
+  }
+
+  /// Escuchar actualizaciones de compras
+  void _listenToPurchaseUpdated(List<PurchaseDetails> purchaseDetailsList) {
+    for (final PurchaseDetails purchaseDetails in purchaseDetailsList) {
+      if (purchaseDetails.status == PurchaseStatus.pending) {
+        // Mostrar indicador de carga
+        setState(() {
+          _purchaseInProgress = true;
+        });
+      } else {
+        setState(() {
+          _purchaseInProgress = false;
+        });
+        
+        if (purchaseDetails.status == PurchaseStatus.error) {
+          _handleError(purchaseDetails.error!);
+        } else if (purchaseDetails.status == PurchaseStatus.purchased ||
+                   purchaseDetails.status == PurchaseStatus.restored) {
+          _handleSuccessfulPurchase(purchaseDetails);
+        }
+        
+        if (purchaseDetails.pendingCompletePurchase) {
+          _inAppPurchase.completePurchase(purchaseDetails);
+        }
+      }
+    }
+  }
+
+  /// Manejar compra exitosa
+  Future<void> _handleSuccessfulPurchase(PurchaseDetails purchaseDetails) async {
+    print('🛒 Compra exitosa: ${purchaseDetails.productID}');
+    
+    try {
+      // Actualizar en Firestore
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .update({'removeAds': true});
+        
+        // Actualizar en SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('remove_ads', true);
+        
+        // Notificar al servicio de anuncios que el estado cambió
+        await BannerAdService.notifyAdsStateChanged();
+        
+        // Recargar datos del perfil
+        setState(() {
+          _userDataFuture = _loadUserData();
+        });
+        
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('¡Anuncios removidos exitosamente! 🎉'),
+              backgroundColor: AppColors.mintGreen,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('🛒 Error al actualizar estado de compra: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al procesar la compra: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Manejar errores de compra
+  void _handleError(IAPError error) {
+    print('🛒 Error de compra: ${error.message}');
+    
+    if (context.mounted) {
+      String errorMessage;
+      switch (error.code) {
+        case 'user_cancelled':
+          errorMessage = 'Compra cancelada por el usuario';
+          break;
+        case 'payment_cancelled':
+          errorMessage = 'Pago cancelado';
+          break;
+        case 'item_unavailable':
+          errorMessage = 'Producto no disponible';
+          break;
+        case 'network_error':
+          errorMessage = 'Error de conexión. Verifica tu internet';
+          break;
+        default:
+          errorMessage = 'Error en la compra: ${error.message}';
+      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+    }
+  }
+
+  /// Método para manejar la compra de remover anuncios
+  Future<void> _comprarRemoverAnuncios() async {
+    if (!_isAvailable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Las compras in-app no están disponibles'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    if (_purchaseInProgress) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ya hay una compra en proceso...'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    final ProductDetails? productDetails = _products.firstWhere(
+      (product) => product.id == _productId,
+      orElse: () => throw Exception('Producto no encontrado'),
+    );
+
+    if (productDetails == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Producto no disponible'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Mostrar diálogo de confirmación con precio
+      final bool? confirmar = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            backgroundColor: AppColors.backgroundCard,
+            title: const Text(
+              'Remover Anuncios',
+              style: TextStyle(color: AppColors.textWhite),
+            ),
+            content: Text(
+              '¿Deseas comprar la versión sin anuncios por ${productDetails.price}?\n\nEsto removerá permanentemente todos los anuncios de banner de la aplicación.',
+              style: const TextStyle(color: AppColors.textWhite),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text(
+                  'Cancelar',
+                  style: TextStyle(color: AppColors.textWhite),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text(
+                  'Comprar',
+                  style: TextStyle(color: AppColors.mintGreen),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirmar == true && context.mounted) {
+        setState(() {
+          _purchaseInProgress = true;
+        });
+        
+        // Iniciar la compra
+        final PurchaseParam purchaseParam = PurchaseParam(
+          productDetails: productDetails,
+        );
+        
+        await _inAppPurchase.buyNonConsumable(purchaseParam: purchaseParam);
+      }
+    } catch (e) {
+      setState(() {
+        _purchaseInProgress = false;
+      });
+      
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al iniciar la compra: $e'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _cerrarSesion(BuildContext context) async {
     final bool? confirmar = await showDialog<bool>(
       context: context,
@@ -265,7 +523,7 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Text(
-                              'Error al cargar perfil: ���{snapshot.error}',
+                              'Error al cargar perfil:    {snapshot.error}',
                               style: const TextStyle(color: AppColors.warning),
                             ),
                             const SizedBox(height: 16),
@@ -301,6 +559,7 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
                     final int identificaciones = activity['photosUploaded'] ?? 0;
                     final int bitacoras = activity['fieldNotesCreated'] ?? 0;
                     final int insignias = (user['badges'] as List?)?.length ?? 0;
+                    final bool removeAds = user['removeAds'] ?? false;
 
                     return ListView(
                       padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
@@ -458,6 +717,17 @@ class _ProfileScreenState extends State<ProfileScreen> with BannerAdMixin {
                                 trailing: Icons.arrow_forward_ios,
                               ),
                             if (_hasInternet) _DividerPerfil(),
+                            // Botón de Remover Anuncios (solo visible si removeAds es false)
+                            if (!removeAds && _hasInternet) ...[
+                              _AccionPerfilTile(
+                                icon: _purchaseInProgress ? Icons.hourglass_empty : Icons.block,
+                                iconColor: _purchaseInProgress ? AppColors.warning : AppColors.mintGreen,
+                                label: _purchaseInProgress ? "Procesando compra..." : "Remover Anuncios",
+                                onTap: _purchaseInProgress ? () {} : () => _comprarRemoverAnuncios(),
+                                trailing: _purchaseInProgress ? null : Icons.arrow_forward_ios,
+                              ),
+                              _DividerPerfil(),
+                            ],
                             _AccionPerfilTile(
                               icon: Icons.logout,
                               iconColor: AppColors.warning,

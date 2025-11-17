@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Servicio centralizado para gestionar banners de anuncios
 /// 
@@ -12,6 +15,10 @@ class BannerAdService {
   bool _isBannerAdReady = false;
   VoidCallback? _onAdLoaded;
   Function(String)? _onAdFailedToLoad;
+  
+  // Sistema de notificación reactivo
+  static final ValueNotifier<bool> _shouldShowAdsNotifier = ValueNotifier<bool>(true);
+  static ValueNotifier<bool> get shouldShowAdsNotifier => _shouldShowAdsNotifier;
 
   // IDs de unidades de anuncios
   static const String _androidAdUnitId = 'ca-app-pub-2455614119782029/5903033792';
@@ -19,16 +26,76 @@ class BannerAdService {
 
   /// Verifica si se deben mostrar anuncios basándose en las preferencias del usuario
   /// 
+  /// Verifica tanto SharedPreferences como Firestore para garantizar consistencia
   /// Retorna true si removeAds es false o no existe
   /// Retorna false si removeAds es true
   static Future<bool> shouldShowAds() async {
     try {
+      bool removeAds = false;
+      
+      // Primero verificar SharedPreferences (más rápido)
       final prefs = await SharedPreferences.getInstance();
-      final removeAds = prefs.getBool('remove_ads') ?? false;
-      return !removeAds; // Mostrar anuncios si removeAds es false o no existe
+      removeAds = prefs.getBool('remove_ads') ?? false;
+      
+      // Si SharedPreferences dice que NO remover anuncios, verificar también Firestore
+      // para asegurar consistencia (especialmente en el primer inicio después de compra)
+      if (!removeAds) {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          try {
+            final userDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.uid)
+                .get();
+            
+            if (userDoc.exists) {
+              final firestoreRemoveAds = userDoc.data()?['removeAds'] ?? false;
+              
+              // Si Firestore dice que SÍ remover anuncios pero SharedPreferences no está actualizado
+              if (firestoreRemoveAds && !removeAds) {
+                print('🔄 Sincronizando estado de anuncios: Firestore=true, SharedPreferences=false');
+                // Actualizar SharedPreferences para que coincida con Firestore
+                await prefs.setBool('remove_ads', true);
+                removeAds = true;
+              }
+            }
+          } catch (e) {
+            print('⚠️ Error al verificar Firestore para anuncios: $e');
+            // Si hay error con Firestore, usar valor de SharedPreferences
+          }
+        }
+      }
+      
+      final shouldShow = !removeAds;
+      
+      // Actualizar el notificador si el valor cambió
+      if (_shouldShowAdsNotifier.value != shouldShow) {
+        _shouldShowAdsNotifier.value = shouldShow;
+        print('📢 Estado de anuncios actualizado: mostrar=$shouldShow');
+      }
+      
+      return shouldShow;
     } catch (e) {
-      print('Error al verificar preferencias de anuncios: $e');
+      print('❌ Error al verificar preferencias de anuncios: $e');
       return true; // Por defecto, mostrar anuncios si hay error
+    }
+  }
+  
+  /// Notifica cambio en el estado de anuncios (para uso interno después de compras)
+  static Future<void> notifyAdsStateChanged() async {
+    print('🔔 Verificando cambio en estado de anuncios...');
+    await shouldShowAds(); // Esto actualizará el notificador si es necesario
+  }
+  
+  /// Fuerza la ocultación de anuncios y notifica el cambio
+  static Future<void> forceHideAds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('remove_ads', true);
+      _shouldShowAdsNotifier.value = false;
+      print('🚫 Anuncios ocultados forzadamente');
+    } catch (e) {
+      print('❌ Error al forzar ocultación de anuncios: $e');
     }
   }
 
@@ -51,6 +118,9 @@ class BannerAdService {
     if (!showAds) {
       print('🚫 Anuncios deshabilitados por preferencias del usuario');
       _isBannerAdReady = false;
+      // Limpiar cualquier anuncio existente
+      _bannerAd?.dispose();
+      _bannerAd = null;
       return;
     }
 
@@ -92,6 +162,11 @@ class BannerAdService {
   /// Retorna un Container con el banner si está listo, 
   /// o un Container vacío si no está disponible
   Widget buildBannerWidget() {
+    // Verificar si se deben mostrar anuncios usando el notificador
+    if (!_shouldShowAdsNotifier.value) {
+      return const SizedBox.shrink();
+    }
+    
     if (_isBannerAdReady && _bannerAd != null) {
       return Container(
         width: _bannerAd!.size.width.toDouble(),
@@ -106,6 +181,11 @@ class BannerAdService {
   /// 
   /// [margin] - EdgeInsets para el margen del banner
   Widget buildBannerWithMargin({EdgeInsets? margin}) {
+    // Verificar si se deben mostrar anuncios usando el notificador
+    if (!_shouldShowAdsNotifier.value) {
+      return const SizedBox.shrink();
+    }
+    
     if (_isBannerAdReady && _bannerAd != null) {
       return Container(
         margin: margin ?? const EdgeInsets.symmetric(vertical: 8),
@@ -146,6 +226,7 @@ class BannerAdService {
 /// en widgets con state.
 mixin BannerAdMixin<T extends StatefulWidget> on State<T> {
   final BannerAdService _bannerAdService = BannerAdService();
+  VoidCallback? _adsStateListener;
 
   /// Getter para acceder al servicio de banner
   BannerAdService get bannerAdService => _bannerAdService;
@@ -159,6 +240,16 @@ mixin BannerAdMixin<T extends StatefulWidget> on State<T> {
       onAdLoaded: onAdLoaded ?? _defaultOnAdLoaded,
       onAdFailedToLoad: onAdFailedToLoad ?? _defaultOnAdFailedToLoad,
     );
+    
+    // Escuchar cambios en el estado de anuncios
+    _adsStateListener = () {
+      if (mounted) {
+        setState(() {
+          // Actualizar la UI cuando cambie el estado de anuncios
+        });
+      }
+    };
+    BannerAdService.shouldShowAdsNotifier.addListener(_adsStateListener!);
   }
 
   /// Callback por defecto cuando se carga el anuncio
@@ -175,9 +266,17 @@ mixin BannerAdMixin<T extends StatefulWidget> on State<T> {
     print('🔴 Banner ad failed to load: $error');
   }
 
-  /// Widget para mostrar el banner
+  /// Widget para mostrar el banner (reactivo a cambios de estado)
   Widget buildBanner({EdgeInsets? margin}) {
-    return _bannerAdService.buildBannerWithMargin(margin: margin);
+    return ValueListenableBuilder<bool>(
+      valueListenable: BannerAdService.shouldShowAdsNotifier,
+      builder: (context, shouldShow, child) {
+        if (!shouldShow) {
+          return const SizedBox.shrink();
+        }
+        return _bannerAdService.buildBannerWithMargin(margin: margin);
+      },
+    );
   }
 
   /// Limpia los recursos del banner
@@ -186,6 +285,10 @@ mixin BannerAdMixin<T extends StatefulWidget> on State<T> {
   @mustCallSuper
   void disposeBanner() {
     _bannerAdService.dispose();
+    if (_adsStateListener != null) {
+      BannerAdService.shouldShowAdsNotifier.removeListener(_adsStateListener!);
+      _adsStateListener = null;
+    }
   }
 }
 
