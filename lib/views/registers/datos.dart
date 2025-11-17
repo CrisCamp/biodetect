@@ -62,12 +62,16 @@ class _RegDatosState extends State<RegDatos> {
   bool _hasInternet = true;
   bool _isGettingLocation = false;
   bool _isAnalyzing = false;
+  bool _isSendingForReview = false;
   Map<String, double> _coords = {};
   
   // Contadores de caracteres para los campos de texto
   int _detailsCharCount = 0;
   int _notesCharCount = 0;
   static const int _maxCharacters = 255;
+  
+  // Checkbox para proporcionar imagen para mejorar modelo (solo nuevos registros)
+  bool _allowImageForModel = true;
 
   // Expresiones regulares separadas para latitud y longitud
   final RegExp _latitudRegExp = RegExp(r'^-?([0-8]?[0-9](\.[0-9]+)?|90(\.0+)?)$');
@@ -347,6 +351,29 @@ class _RegDatosState extends State<RegDatos> {
   /// 
   /// RESULTADO: Si se pierde la conexión en cualquier punto crítico, todo el proceso
   /// se cancela para evitar registros incompletos o actividades de usuario desincronizadas.
+
+  /// Método para subir imagen al dataset (sin verificaciones exhaustivas)
+  Future<void> _subirImagenADataset(String userId, String photoId) async {
+    try {
+      // Normalizar nombres para las carpetas
+      final String classFolder = className.toLowerCase();
+      final String orderFolder = taxonOrder.toLowerCase();
+      
+      // Crear la ruta del dataset
+      final String datasetPath = 'dataset/$classFolder/$orderFolder/$photoId.jpg';
+      
+      // Referencia al archivo en el dataset
+      final ref = FirebaseStorage.instance.ref().child(datasetPath);
+      
+      // Subir la imagen al dataset
+      await ref.putFile(widget.imageFile!);
+      
+      print('✅ Imagen subida al dataset: $datasetPath');
+    } catch (e) {
+      // "Ni modo" - solo log del error, no interrumpir el flujo
+      print('⚠️ Error al subir imagen al dataset: $e');
+    }
+  }
 
   /// Método principal que implementa el patrón híbrido:
   /// - Batch para operaciones Firestore (atómicas)
@@ -870,11 +897,17 @@ class _RegDatosState extends State<RegDatos> {
         }
       } else {
         // Modo nuevo: usar patrón híbrido para crear registro
-        await _guardarRegistroAtomico(user.uid, null, null);
+        final String newPhotoId = await _guardarRegistroAtomico(user.uid, null, null);
         
         // NOTIFICAR AL PERFIL: Informar que se creó un nuevo registro
         ProfileNotifier().notifyRegistroCreado();
         print('🔔 Notificado al ProfileScreen: nuevo registro creado (Clase: $className, Orden: $taxonOrder)');
+        
+        // SUBIR AL DATASET: Si el usuario lo permitió, subir imagen al dataset
+        if (_allowImageForModel) {
+          print('🔄 Subiendo imagen al dataset...');
+          await _subirImagenADataset(user.uid, newPhotoId);
+        }
         
         if (mounted) {
           ScaffoldMessenger.of(context).clearSnackBars();
@@ -1480,6 +1513,16 @@ class _RegDatosState extends State<RegDatos> {
             ),
             TextButton(
               child: const Text(
+                'Enviar para revisión',
+                style: TextStyle(color: AppColors.textPaleGreen),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _enviarRevision();
+              },
+            ),
+            TextButton(
+              child: const Text(
                 'Seleccionar manualmente',
                 style: TextStyle(color: AppColors.textPaleGreen),
               ),
@@ -1491,6 +1534,145 @@ class _RegDatosState extends State<RegDatos> {
         );
       },
     );
+  }
+
+  Future<void> _enviarRevision() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Verificar que tenemos una imagen para enviar
+    if (widget.imageFile == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error: No hay imagen para enviar a revisión.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      setState(() => _isSendingForReview = true);
+
+      // Mostrar diálogo de progreso bloqueante
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.deepGreen),
+                strokeWidth: 3.0,
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Enviando para revisión...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Subiendo imagen y enviando datos\nEsto puede tomar unos momentos',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.cloud_upload,
+                    size: 16,
+                    color: Colors.blue[600],
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Enviando datos...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+
+      final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
+
+      final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
+      await ref.putFile(widget.imageFile!);
+      final imageUrl = await ref.getDownloadURL();
+
+      await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
+        'userId': user.uid,
+        'imageUrl': imageUrl,
+        'uploadedAt': FieldValue.serverTimestamp(),
+        'status': 'pending',
+        'coords': {'x': lat, 'y': lon}
+      });
+
+      if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
+        // Mostrar mensaje de éxito
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto enviada para revisión. Gracias por su apoyo.'),
+            backgroundColor: AppColors.buttonGreen2,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        
+        // Regresar a la interfaz anterior con indicador de que se envió a revisión
+        if (mounted) {
+          Navigator.of(context).pop('sent_for_review');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet e inténtalo de nuevo.';
+        } else {
+          errorMessage = 'Error al enviar: $e';
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSendingForReview = false);
+    }
   }
 
   @override
@@ -2066,7 +2248,60 @@ class _RegDatosState extends State<RegDatos> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 25),
+                                const SizedBox(height: 20),
+                                // Checkbox para mejorar modelo (solo nuevos registros)
+                                if (!_isEditing) ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.slateGreen.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: AppColors.slateGreen.withValues(alpha: 0.3),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Checkbox(
+                                          value: _allowImageForModel,
+                                          onChanged: _isProcessing || _isAnalyzing 
+                                              ? null 
+                                              : (bool? value) {
+                                                  setState(() {
+                                                    _allowImageForModel = value ?? true;
+                                                  });
+                                                },
+                                          activeColor: AppColors.buttonGreen2,
+                                          checkColor: AppColors.textBlack,
+                                          side: const BorderSide(
+                                            color: AppColors.textWhite,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: GestureDetector(
+                                            onTap: _isProcessing || _isAnalyzing 
+                                                ? null 
+                                                : () {
+                                                    setState(() {
+                                                      _allowImageForModel = !_allowImageForModel;
+                                                    });
+                                                  },
+                                            child: const Text(
+                                              'Permitir usar esta imagen para mejorar el modelo de IA',
+                                              style: TextStyle(
+                                                color: AppColors.textWhite,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
                                 // Botón guardar/actualizar
                                 Row(
                                   children: [
