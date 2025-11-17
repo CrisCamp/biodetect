@@ -87,4 +87,5 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-storage")
     implementation("com.google.android.gms:play-services-ads:24.6.0")
+    implementation("com.android.billingclient:billing:6.0.1")
 }
