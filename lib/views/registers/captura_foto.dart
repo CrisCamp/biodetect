@@ -313,7 +313,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
               ),
             );
 
-            if (result == 'saved' && mounted) {
+            if ((result == 'saved' || result == 'sent_for_review') && mounted) {
               setState(() {
                 _image = null;
               });
@@ -526,7 +526,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
         ),
       );
 
-      if (result == 'saved' && mounted) {
+      if ((result == 'saved' || result == 'sent_for_review') && mounted) {
         setState(() {
           _image = null;
           _isProcessing = false;
@@ -551,6 +551,64 @@ class _CapturaFotoState extends State<CapturaFoto> {
     try {
       setState(() => _isProcessing = true);
 
+      // Mostrar diálogo de progreso bloqueante
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.deepGreen),
+                strokeWidth: 3.0,
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Enviando para revisión...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Subiendo imagen y enviando datos\nEsto puede tomar unos momentos',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.cloud_upload,
+                    size: 16,
+                    color: Colors.blue[600],
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Enviando datos...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+
       final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
 
       final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
@@ -566,6 +624,9 @@ class _CapturaFotoState extends State<CapturaFoto> {
       });
 
       if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Foto enviada para revisión. Gracias por su apoyo.'),
@@ -579,6 +640,9 @@ class _CapturaFotoState extends State<CapturaFoto> {
       }
     } catch (e) {
       if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
         // Verificar si es un error de conexión
         String errorMessage;
         
@@ -626,7 +690,7 @@ class _CapturaFotoState extends State<CapturaFoto> {
         ),
       );
 
-      if (result == 'saved' && mounted) {
+      if ((result == 'saved' || result == 'sent_for_review') && mounted) {
         setState(() {
           _image = null;
         });

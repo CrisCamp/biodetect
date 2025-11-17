@@ -62,6 +62,7 @@ class _RegDatosState extends State<RegDatos> {
   bool _hasInternet = true;
   bool _isGettingLocation = false;
   bool _isAnalyzing = false;
+  bool _isSendingForReview = false;
   Map<String, double> _coords = {};
   
   // Contadores de caracteres para los campos de texto
@@ -1512,6 +1513,16 @@ class _RegDatosState extends State<RegDatos> {
             ),
             TextButton(
               child: const Text(
+                'Enviar para revisión',
+                style: TextStyle(color: AppColors.textPaleGreen),
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _enviarRevision();
+              },
+            ),
+            TextButton(
+              child: const Text(
                 'Seleccionar manualmente',
                 style: TextStyle(color: AppColors.textPaleGreen),
               ),
@@ -1523,6 +1534,145 @@ class _RegDatosState extends State<RegDatos> {
         );
       },
     );
+  }
+
+  Future<void> _enviarRevision() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Verificar que tenemos una imagen para enviar
+    if (widget.imageFile == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error: No hay imagen para enviar a revisión.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      setState(() => _isSendingForReview = true);
+
+      // Mostrar diálogo de progreso bloqueante
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.deepGreen),
+                strokeWidth: 3.0,
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Enviando para revisión...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Subiendo imagen y enviando datos\nEsto puede tomar unos momentos',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.cloud_upload,
+                    size: 16,
+                    color: Colors.blue[600],
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Enviando datos...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+
+      final photoId = FirebaseFirestore.instance.collection('unidentified').doc().id;
+
+      final ref = FirebaseStorage.instance.ref().child('unidentified/${user.uid}/$photoId.jpg');
+      await ref.putFile(widget.imageFile!);
+      final imageUrl = await ref.getDownloadURL();
+
+      await FirebaseFirestore.instance.collection('unidentified').doc(photoId).set({
+        'userId': user.uid,
+        'imageUrl': imageUrl,
+        'uploadedAt': FieldValue.serverTimestamp(),
+        'status': 'pending',
+        'coords': {'x': lat, 'y': lon}
+      });
+
+      if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
+        // Mostrar mensaje de éxito
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto enviada para revisión. Gracias por su apoyo.'),
+            backgroundColor: AppColors.buttonGreen2,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        
+        // Regresar a la interfaz anterior con indicador de que se envió a revisión
+        if (mounted) {
+          Navigator.of(context).pop('sent_for_review');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        // Cerrar el diálogo de progreso
+        Navigator.of(context).pop();
+        
+        // Verificar si es un error de conexión
+        String errorMessage;
+        
+        if (_isConnectionError(e)) {
+          // Es un error de conexión
+          await _checkInternetConnection(); // Actualizar estado de conexión
+          errorMessage = 'Error de conexión. Verifica tu conexión a internet e inténtalo de nuevo.';
+        } else {
+          errorMessage = 'Error al enviar: $e';
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSendingForReview = false);
+    }
   }
 
   @override
