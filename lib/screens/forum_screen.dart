@@ -346,8 +346,11 @@ class Message {
     }
     
     final content = data['content'] ?? '';
-    if (content.trim().isEmpty) {
-      throw Exception('Mensaje con contenido vacío - no crear mensaje');
+    final includeImage = data['includeImage'] ?? false;
+    
+    // Permitir mensajes con imagen pero sin texto, o mensajes con texto
+    if (content.trim().isEmpty && !includeImage) {
+      throw Exception('Mensaje con contenido vacío y sin imagen - no crear mensaje');
     }
     
     final userId = data['userId'] ?? '';
