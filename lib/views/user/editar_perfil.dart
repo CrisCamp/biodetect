@@ -5,11 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:biodetect/views/user/cambiar_contrasena.dart';
-import 'package:biodetect/views/session/inicio_sesion.dart';
+import 'package:biodetect/views/user/eliminar_cuenta.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'dart:async';
 
 class EditarPerfil extends StatefulWidget {
@@ -434,8 +432,29 @@ class _EditarPerfilState extends State<EditarPerfil> {
     }
   }
 
+  /// Verifica si el usuario SOLO tiene Google como proveedor (sin email/contraseña)
+  bool _isGoogleOnlyUser() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    
+    bool hasGoogle = false;
+    bool hasPassword = false;
+    
+    // Verificar todos los proveedores de autenticación del usuario
+    for (final providerData in user.providerData) {
+      if (providerData.providerId == 'google.com') {
+        hasGoogle = true;
+      } else if (providerData.providerId == 'password') {
+        hasPassword = true;
+      }
+    }
+    
+    // Solo ocultar el botón si ÚNICAMENTE tiene Google (sin email/contraseña)
+    return hasGoogle && !hasPassword;
+  }
+
   Future<void> _mostrarDialogoEliminarCuenta() async {
-    // 1. Verificación inicial de conectividad antes de mostrar diálogo
+    // Verificación inicial de conectividad antes de navegar
     print('🔍 EditarPerfil: Verificando conexión para eliminar cuenta...');
     try {
       // Usar lookup DNS para verificación más robusta de conectividad
@@ -458,507 +477,14 @@ class _EditarPerfilState extends State<EditarPerfil> {
       return;
     }
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final confirmationController = TextEditingController();
-    bool isDeleting = false;
-    String? errorMessage;
-    bool _disposed = false; // Flag para controlar el dispose
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return WillPopScope(
-          onWillPop: () async => !isDeleting,
-          child: StatefulBuilder(
-            builder: (context, setDialogState) {
-              return AlertDialog(
-                backgroundColor: AppColors.backgroundCard,
-                title: const Text(
-                  '⚠️ Eliminar cuenta',
-                  style: TextStyle(
-                    color: AppColors.warning,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Esta acción eliminará permanentemente:\n\n'
-                          '• Tu perfil y datos personales\n'
-                          '• Todas tus fotos de artrópodos\n'
-                          '• Tus bitácoras de campo\n'
-                          '• Mensajes del foro\n'
-                          '• Estadísticas de actividad\n'
-                          '• Archivos en la nube\n\n'
-                          'Esta acción NO se puede deshacer.',
-                          style: TextStyle(color: AppColors.textWhite, fontSize: 14),
-                        ),
-                        const SizedBox(height: 20),
-                        const Text(
-                          'Para confirmar, escribe tu dirección de email actual:',
-                          style: TextStyle(
-                            color: AppColors.textWhite,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        if (!_disposed) // Solo mostrar si no está disposed
-                          TextFormField(
-                            controller: confirmationController,
-                            enabled: !isDeleting,
-                            keyboardType: TextInputType.emailAddress,
-                            decoration: InputDecoration(
-                              labelText: 'Escribe tu email exacto',
-                              labelStyle: const TextStyle(color: AppColors.textWhite),
-                              filled: true,
-                              fillColor: AppColors.slateGreen,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: errorMessage != null 
-                                  ? const BorderSide(color: AppColors.warning, width: 2)
-                                  : BorderSide.none,
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: errorMessage != null 
-                                  ? const BorderSide(color: AppColors.warning, width: 2)
-                                  : BorderSide.none,
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: errorMessage != null 
-                                  ? const BorderSide(color: AppColors.warning, width: 2)
-                                  : const BorderSide(color: AppColors.aquaBlue, width: 2),
-                              ),
-                              prefixIcon: const Icon(Icons.email_outlined, color: AppColors.textWhite),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            ),
-                            style: const TextStyle(color: AppColors.textWhite),
-                            onChanged: (value) {
-                              if (errorMessage != null && !_disposed) {
-                                setDialogState(() {
-                                  errorMessage = null;
-                                });
-                              }
-                            },
-                          ),
-                        if (errorMessage != null) ...[
-                          const SizedBox(height: 8),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppColors.warning.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: AppColors.warning, width: 1),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.error_outline, color: AppColors.warning, size: 20),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    errorMessage!,
-                                    style: const TextStyle(
-                                      color: AppColors.warning,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        Expanded(
-                          child: TextButton(
-                            onPressed: isDeleting ? null : () {
-                              if (!_disposed) {
-                                _disposed = true;
-                                confirmationController.dispose();
-                              }
-                              Navigator.of(dialogContext).pop();
-                            },
-                            child: const Text(
-                              'Volver',
-                              style: TextStyle(color: AppColors.textWhite),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.warning,
-                              foregroundColor: AppColors.textWhite,
-                              minimumSize: const Size(0, 40),
-                            ),
-                            onPressed: isDeleting || _disposed ? null : () async {
-                              final inputText = confirmationController.text.trim();
-                              
-                              if (inputText.isEmpty) {
-                                setDialogState(() {
-                                  errorMessage = 'Por favor introduce tu email';
-                                });
-                                return;
-                              }
-                              
-                              if (inputText.toLowerCase() != user.email?.toLowerCase()) {
-                                setDialogState(() {
-                                  errorMessage = 'El email no coincide con tu cuenta actual';
-                                });
-                                return;
-                              }
-
-                              // Marcar como eliminando
-                              setDialogState(() {
-                                isDeleting = true;
-                                errorMessage = null;
-                              });
-
-                              try {
-                                // Eliminar cuenta
-                                await _eliminarCuentaCompleta();
-                                
-                                // Marcar como disposed y limpiar
-                                _disposed = true;
-                                confirmationController.dispose();
-                                
-                                // Cerrar diálogo usando el contexto correcto
-                                if (Navigator.of(dialogContext).canPop()) {
-                                  Navigator.of(dialogContext).pop();
-                                }
-                                
-                                // Navegar a login
-                                if (mounted) {
-                                  // Usar pushAndRemoveUntil en lugar de pushNamedAndRemoveUntil
-                                  Navigator.of(context).pushAndRemoveUntil(
-                                    MaterialPageRoute(builder: (_) => const InicioSesion()),
-                                    (route) => false,
-                                  );
-                                }
-                              } catch (e) {
-                                print('Error al eliminar cuenta: $e');
-                                
-                                // Si hubo error, intentar navegar al login de todas formas
-                                if (!_disposed) {
-                                  _disposed = true;
-                                  confirmationController.dispose();
-                                }
-                                
-                                if (Navigator.of(dialogContext).canPop()) {
-                                  Navigator.of(dialogContext).pop();
-                                }
-                                
-                                if (mounted) {
-                                  Navigator.of(context).pushAndRemoveUntil(
-                                    MaterialPageRoute(builder: (_) => const InicioSesion()),
-                                    (route) => false,
-                                  );
-                                }
-                              }
-                            },
-                            child: isDeleting
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: AppColors.textWhite,
-                                    ),
-                                  )
-                                : const Text(
-                                    'ELIMINAR',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        );
-      },
+    // Navegar a la pantalla de eliminar cuenta
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const EliminarCuenta()),
     );
   }
 
-  Future<void> _eliminarCuentaCompleta() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw Exception('No hay usuario autenticado');
 
-    try {
-      print('🔍 EditarPerfil: Iniciando eliminación completa de cuenta...');
-
-      // 1. Verificación inicial de conectividad para eliminación
-      print('🌐 EditarPerfil: Verificando conexión a internet para eliminación...');
-      try {
-        // Usar lookup DNS para verificación más robusta de conectividad
-        final result = await InternetAddress.lookup('dns.google').timeout(const Duration(seconds: 10));
-        if (result.isEmpty || result[0].rawAddress.isEmpty) {
-          throw Exception('No internet connection');
-        }
-        print('✅ EditarPerfil: Conexión inicial confirmada para eliminación con DNS lookup');
-      } catch (e) {
-        print('❌ EditarPerfil: No hay conexión a internet para eliminar cuenta');
-        throw Exception('No hay conexión a internet. Se requiere conectividad estable para eliminar tu cuenta de forma segura.');
-      }
-
-      // 2. PRIMERO: Eliminar archivos de Storage (antes de Firestore)
-      print('📁 EditarPerfil: Paso 1 - Eliminando archivos de Storage...');
-      
-      // Eliminar fotos de perfil
-      try {
-        final profilePicturesRef = FirebaseStorage.instance
-            .ref()
-            .child('profile_pictures/${user.uid}');
-        final profileItems = await profilePicturesRef.listAll();
-        for (final item in profileItems.items) {
-          await item.delete();
-          print('Foto de perfil eliminada: ${item.name}');
-        }
-      } catch (e) {
-        print('Error al eliminar fotos de perfil: $e');
-      }
-
-      // Eliminar toda la carpeta del usuario en insect_photos
-      try {
-        final userInsectRef = FirebaseStorage.instance
-            .ref()
-            .child('insect_photos/${user.uid}');
-        final userInsectItems = await userInsectRef.listAll();
-        
-        // Eliminar archivos en subcarpetas
-        for (final prefix in userInsectItems.prefixes) {
-          final items = await prefix.listAll();
-          for (final item in items.items) {
-            await item.delete();
-            print('Archivo eliminado: ${item.fullPath}');
-          }
-        }
-        
-        // Eliminar archivos directos
-        for (final item in userInsectItems.items) {
-          await item.delete();
-          print('Archivo directo eliminado: ${item.fullPath}');
-        }
-      } catch (e) {
-        print('Error al eliminar carpeta de insectos: $e');
-      }
-
-      // Eliminar archivos de bitácoras si existen
-      try {
-        final fieldNotesRef = FirebaseStorage.instance
-            .ref()
-            .child('field_notes/${user.uid}');
-        final fieldNotesItems = await fieldNotesRef.listAll();
-        for (final item in fieldNotesItems.items) {
-          await item.delete();
-          print('Archivo de bitácora eliminado: ${item.name}');
-        }
-      } catch (e) {
-        print('Error al eliminar archivos de bitácoras: $e');
-      }
-
-      // Eliminar archivos del chat grupal si existen
-      try {
-        final chatRef = FirebaseStorage.instance
-            .ref()
-            .child('group_chat/${user.uid}');
-        final chatItems = await chatRef.listAll();
-        for (final item in chatItems.items) {
-          await item.delete();
-          print('Archivo de chat eliminado: ${item.name}');
-        }
-      } catch (e) {
-        print('Error al eliminar archivos de chat: $e');
-      }
-
-      print('✅ EditarPerfil: Paso 1 completado - Archivos de Storage eliminados');
-
-      // 3. Verificación intermedia de conexión antes de Firestore
-      print('🔍 EditarPerfil: Verificación intermedia de conectividad antes de Firestore...');
-      try {
-        // Usar lookup DNS para verificación más robusta de conectividad
-        final result = await InternetAddress.lookup('dns.google').timeout(const Duration(seconds: 10));
-        if (result.isEmpty || result[0].rawAddress.isEmpty) {
-          throw Exception('No internet connection');
-        }
-        print('✅ EditarPerfil: Conectividad intermedia confirmada con DNS lookup');
-      } catch (e) {
-        print('❌ EditarPerfil: Fallo en verificación intermedia - cancelando eliminación');
-        throw Exception('Se perdió la conexión a internet durante el proceso. La eliminación de cuenta ha sido cancelada por seguridad.');
-      }
-
-      // 4. SEGUNDO: Eliminar documentos de Firestore usando batch atómico
-      print('💾 EditarPerfil: Paso 2 - Eliminando documentos de Firestore con batch atómico...');
-      final batch = FirebaseFirestore.instance.batch();
-      
-      // Eliminar fotos de artrópodos identificados
-      final insectPhotosQuery = await FirebaseFirestore.instance
-          .collection('insect_photos')
-          .where('userId', isEqualTo: user.uid)
-          .get();
-      
-      for (final doc in insectPhotosQuery.docs) {
-        batch.delete(doc.reference);
-      }
-      print('Marcadas ${insectPhotosQuery.docs.length} fotos identificadas para eliminar');
-
-      // Eliminar fotos no identificadas
-      final unidentifiedQuery = await FirebaseFirestore.instance
-          .collection('unidentified')
-          .where('userId', isEqualTo: user.uid)
-          .get();
-      
-      for (final doc in unidentifiedQuery.docs) {
-        batch.delete(doc.reference);
-      }
-      print('Marcadas ${unidentifiedQuery.docs.length} fotos no identificadas para eliminar');
-
-      // Eliminar bitácoras
-      final fieldNotesQuery = await FirebaseFirestore.instance
-          .collection('field_notes')
-          .where('userId', isEqualTo: user.uid)
-          .get();
-      
-      for (final doc in fieldNotesQuery.docs) {
-        batch.delete(doc.reference);
-      }
-      print('Marcadas ${fieldNotesQuery.docs.length} bitácoras para eliminar');
-
-      // Eliminar mensajes del foro
-      final chatQuery = await FirebaseFirestore.instance
-          .collection('group_chat')
-          .where('userId', isEqualTo: user.uid)
-          .get();
-      
-      for (final doc in chatQuery.docs) {
-        batch.delete(doc.reference);
-      }
-      print('Marcados ${chatQuery.docs.length} mensajes de chat para eliminar');
-
-      // Eliminar actividad del usuario
-      batch.delete(FirebaseFirestore.instance.collection('user_activity').doc(user.uid));
-
-      // Eliminar perfil del usuario
-      batch.delete(FirebaseFirestore.instance.collection('users').doc(user.uid));
-
-      // 5. Verificación final de conexión antes del commit del batch
-      print('🔍 EditarPerfil: Verificación final de conectividad antes del batch commit...');
-      try {
-        // Usar lookup DNS para verificación más robusta de conectividad
-        final result = await InternetAddress.lookup('dns.google').timeout(const Duration(seconds: 10));
-        if (result.isEmpty || result[0].rawAddress.isEmpty) {
-          throw Exception('No internet connection');
-        }
-        print('✅ EditarPerfil: Conectividad final confirmada con DNS lookup');
-      } catch (e) {
-        print('❌ EditarPerfil: Fallo en verificación final - cancelando batch commit');
-        throw Exception('Se perdió la conexión a internet durante el proceso. La eliminación de cuenta ha sido cancelada por seguridad.');
-      }
-
-      // 6. Ejecutar batch atómico
-      print('💾 EditarPerfil: Ejecutando batch atómico de eliminación...');
-      await batch.commit();
-      print('✅ EditarPerfil: Paso 2 completado - Documentos de Firestore eliminados con batch atómico');
-
-      // 7. TERCERO: Limpiar datos locales
-      print('🧹 EditarPerfil: Paso 3 - Limpiando datos locales...');
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.clear();
-        print('✅ EditarPerfil: Preferencias locales limpiadas');
-      } catch (e) {
-        print('⚠️ EditarPerfil: Error al limpiar preferencias: $e');
-      }
-
-      // 8. CUARTO: Cerrar sesión de Google si aplica
-      print('🔓 EditarPerfil: Paso 4 - Cerrando sesión de Google...');
-      try {
-        await GoogleSignIn().signOut();
-        print('✅ EditarPerfil: Sesión de Google cerrada');
-      } catch (e) {
-        print('⚠️ EditarPerfil: Error al cerrar sesión de Google (puede ser normal si no usó Google): $e');
-      }
-
-      // 9. Verificación final antes de eliminar cuenta de Auth
-      print('🔍 EditarPerfil: Verificación final antes de eliminar cuenta de Firebase Auth...');
-      try {
-        // Usar lookup DNS para verificación más robusta de conectividad
-        final result = await InternetAddress.lookup('dns.google').timeout(const Duration(seconds: 10));
-        if (result.isEmpty || result[0].rawAddress.isEmpty) {
-          throw Exception('No internet connection');
-        }
-        print('✅ EditarPerfil: Conectividad final confirmada para eliminación de Auth');
-      } catch (e) {
-        print('❌ EditarPerfil: Fallo en verificación final para Auth - cancelando eliminación');
-        throw Exception('Se perdió la conexión a internet durante el proceso. La eliminación de cuenta ha sido cancelada por seguridad.');
-      }
-
-      // 10. QUINTO: Eliminar cuenta de Firebase Auth (SIEMPRE AL FINAL)
-      print('🔐 EditarPerfil: Paso 5 - Eliminando cuenta de Firebase Auth...');
-      await user.delete();
-      print('✅ EditarPerfil: Cuenta de Firebase Auth eliminada');
-
-      print('🎉 EditarPerfil: Eliminación completa de cuenta exitosa');
-
-    } catch (e) {
-      final errorString = e.toString().toLowerCase();
-      print('❌ EditarPerfil: Error en eliminación de cuenta - $e');
-      
-      // Detectar errores específicos y proporcionar mensajes amigables
-      if (errorString.contains('unavailable') || 
-          errorString.contains('timeout') || 
-          errorString.contains('network') || 
-          errorString.contains('connection')) {
-        throw Exception('El servidor no está disponible temporalmente. Verifica tu conexión a internet e inténtalo de nuevo en unos momentos.');
-      } else if (errorString.contains('permission-denied') || 
-                 errorString.contains('unauthorized')) {
-        throw Exception('No tienes permisos para eliminar esta cuenta. Verifica tu autenticación.');
-      } else if (errorString.contains('unauthenticated') ||
-                 (errorString.contains('user') && errorString.contains('auth'))) {
-        throw Exception('Tu sesión ha expirado. Inicia sesión nuevamente e inténtalo de nuevo.');
-      } else if (errorString.contains('quota-exceeded') ||
-                 errorString.contains('resource-exhausted')) {
-        throw Exception('Se ha superado la cuota de uso. Inténtalo más tarde.');
-      } else if (errorString.contains('deadline-exceeded') ||
-                 errorString.contains('cancelled')) {
-        throw Exception('La operación tardó demasiado tiempo. Verifica tu conexión e inténtalo de nuevo.');
-      } else if (errorString.contains('perdió') && errorString.contains('conexión')) {
-        rethrow; // Usar mensaje específico de pérdida de conexión
-      } else if (errorString.contains('requires-recent-login')) {
-        throw Exception('Por seguridad, necesitas iniciar sesión nuevamente antes de eliminar tu cuenta.');
-      } else {
-        // Para cualquier otro error, usar un mensaje genérico y amigable
-        throw Exception('No se pudo eliminar la cuenta. Verifica tu conexión a internet e inténtalo de nuevo. Si el problema persiste, contacta al soporte técnico.');
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1120,23 +646,25 @@ class _EditarPerfilState extends State<EditarPerfil> {
                         ),
                         const SizedBox(height: 36),
                         
-                        Center(
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const CambiarContrasenaScreen()),
-                              );
-                            },
-                            child: const Text(
-                              'Cambiar contraseña',
-                              style: TextStyle(
-                                color: AppColors.textWhite,
-                                fontWeight: FontWeight.bold,
+                        // Solo mostrar el botón de cambiar contraseña si NO es un usuario exclusivamente de Google
+                        if (!_isGoogleOnlyUser())
+                          Center(
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => const CambiarContrasenaScreen()),
+                                );
+                              },
+                              child: const Text(
+                                'Cambiar contraseña',
+                                style: TextStyle(
+                                  color: AppColors.textWhite,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ),
